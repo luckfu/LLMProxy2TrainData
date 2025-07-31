@@ -206,7 +206,6 @@ llm_proxy_sharegpt/
 |-- start_web.sh              # Web界面启动脚本
 |-- export_data.sh            # 数据导出脚本
 |-- config.example.json       # 配置文件示例
-|-- .gitignore               # Git忽略文件
 |-- README.md                 # 项目说明（本文件）
 |-- templates/               # Web界面模板
 |   `-- index.html
