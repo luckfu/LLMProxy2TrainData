@@ -195,24 +195,24 @@ curl -X POST "http://localhost:8080/api.siliconflow.cn/v1/chat/completions" \
 
 ```
 llm_proxy_sharegpt/
-├── proxy_dynamic.py          # 主服务器文件
-├── app.py                    # Web管理界面
-├── process_conversations.py  # 数据处理和导出
-├── utils.py                  # 工具函数
-├── test_dynamic_proxy.py     # 基础功能测试
-├── test_embedding_rerank.py  # 嵌入和重排测试
-├── requirements.txt          # 项目依赖
-├── start.sh                  # 代理服务器启动脚本
-├── start_web.sh              # Web界面启动脚本
-├── export_data.sh            # 数据导出脚本
-├── config.example.json       # 配置文件示例
-├── .gitignore               # Git忽略文件
-├── README.md                 # 项目说明（本文件）
-├── templates/               # Web界面模板
-│   └── index.html
-└── static/                  # 静态资源
-    ├── css/
-    └── js/
+|-- proxy_dynamic.py          # 主服务器文件
+|-- app.py                    # Web管理界面
+|-- process_conversations.py  # 数据处理和导出
+|-- utils.py                  # 工具函数
+|-- test_dynamic_proxy.py     # 基础功能测试
+|-- test_embedding_rerank.py  # 嵌入和重排测试
+|-- requirements.txt          # 项目依赖
+|-- start.sh                  # 代理服务器启动脚本
+|-- start_web.sh              # Web界面启动脚本
+|-- export_data.sh            # 数据导出脚本
+|-- config.example.json       # 配置文件示例
+|-- .gitignore               # Git忽略文件
+|-- README.md                 # 项目说明（本文件）
+|-- templates/               # Web界面模板
+|   `-- index.html
+`-- static/                  # 静态资源
+    |-- css/
+    `-- js/
 ```
 
 ## 🧪 测试
