@@ -1,0 +1,16 @@
+# 动态代理服务器依赖
+aiohttp>=3.8.0
+aiosqlite>=0.17.0
+
+# Web管理界面依赖
+Flask>=2.0.0
+
+# 标准库（通常不需要安装）
+# argparse
+# logging
+# json
+# re
+# typing
+# asyncio
+# sqlite3
+# datetime

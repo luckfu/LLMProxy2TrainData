@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>对话数据管理</title>
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/dataTables.bootstrap5.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/github-markdown.min.css') }}" rel="stylesheet">
+    <script src="{{ url_for('static', filename='js/marked.min.js') }}"></script>
+    <style>
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            --danger-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            --primary-color: #667eea;
+            --secondary-color: #f8fafc;
+            --accent-color: #764ba2;
+            --text-primary: #2d3748;
+            --text-secondary: #718096;
+            --border-radius: 16px;
+            --border-radius-sm: 8px;
+            --box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            --box-shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.12);
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #f8fafc;
+            color: var(--text-primary);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .container-fluid {
+            max-width: 1200px;
+            padding: 1.5rem;
+            position: relative;
+        }
+        
+        /* 宽屏自适应 */
+        @media (min-width: 1400px) {
+            .container-fluid {
+                max-width: 90%;
+            }
+        }
+        
+        @media (min-width: 1600px) {
+            .container-fluid {
+                max-width: 85%;
+            }
+        }
+        
+        @media (min-width: 1920px) {
+            .container-fluid {
+                max-width: 80%;
+            }
+        }
+        
+        .page-header {
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--box-shadow);
+            border: 1px solid #e2e8f0;
+        }
+        
+        .page-title {
+            color: var(--text-primary);
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin: 0;
+            text-align: left;
+            border-left: 4px solid var(--primary-color);
+            padding-left: 1rem;
+        }
+        
+        .controls-card {
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--box-shadow);
+            border: 1px solid #e2e8f0;
+            transition: var(--transition);
+        }
+        
+        .controls-card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        .table-container {
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 0;
+            box-shadow: var(--box-shadow);
+            border: 1px solid #e2e8f0;
+            overflow: hidden;
+            transition: var(--transition);
+        }
+        
+        .table-container:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        .table {
+            margin: 0;
+            background: transparent;
+        }
+        
+        .table thead th {
+            background: #f8fafc;
+            border: none;
+            padding: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            border-bottom: 2px solid #e2e8f0;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .table tbody td {
+            padding: 1rem;
+            border: none;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.5);
+            vertical-align: middle;
+        }
+        
+        .table tbody tr {
+            transition: var(--transition);
+        }
+        
+        .table tbody tr:hover {
+            background-color: #f8fafc;
+        }
+        
+        .conversation-preview {
+            max-height: 120px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            padding: 0.75rem;
+            background: #f8fafc;
+            border-radius: var(--border-radius-sm);
+            font-size: 0.875rem;
+            line-height: 1.5;
+            border: 1px solid #e2e8f0;
+            transition: var(--transition);
+        }
+        
+        .conversation-preview:hover {
+            background: #e2e8f0;
+        }
+        
+        .modal-dialog {
+            max-width: 90%;
+            margin: 1.75rem auto;
+        }
+        
+        .modal-content {
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow-lg);
+            border: 1px solid #e2e8f0;
+            background: white;
+        }
+        
+        .modal-header {
+            border-bottom: 1px solid #e2e8f0;
+            background: #f8fafc;
+            border-radius: var(--border-radius) var(--border-radius) 0 0;
+            padding: 1.5rem;
+        }
+        
+        .modal-title {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .modal-body {
+            max-height: 80vh;
+            overflow-y: auto;
+            padding: 2rem;
+        }
+        
+        .modal-footer {
+            border-top: 1px solid #e2e8f0;
+            background: #f8fafc;
+            border-radius: 0 0 var(--border-radius) var(--border-radius);
+            padding: 1.5rem;
+        }
+        
+        .btn {
+            border-radius: var(--border-radius-sm);
+            padding: 0.5rem 1rem;
+            font-weight: 500;
+            font-size: 0.875rem;
+            transition: var(--transition);
+            border: 1px solid transparent;
+        }
+        
+        .btn-primary {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #4c51bf;
+            border-color: #4c51bf;
+        }
+        
+        .btn-primary:focus {
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+        
+        .btn-danger {
+            background: #f56565;
+            border-color: #f56565;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #e53e3e;
+            border-color: #e53e3e;
+        }
+        
+        .btn-info {
+            background: #4facfe;
+            border-color: #4facfe;
+            color: white;
+        }
+        
+        .btn-info:hover {
+            background: #00c9ff;
+            border-color: #00c9ff;
+        }
+        
+        .btn-secondary {
+            background: #718096;
+            border-color: #718096;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #4a5568;
+            border-color: #4a5568;
+        }
+        
+        .btn-sm {
+            padding: 0.375rem 0.75rem;
+            font-size: 0.875rem;
+        }
+        
+        .form-select {
+            border-radius: var(--border-radius-sm);
+            padding: 0.75rem 1rem;
+            border: 1px solid #e2e8f0;
+            background: white;
+            transition: var(--transition);
+            font-weight: 500;
+        }
+        
+        .form-select:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 0.25rem rgba(102, 126, 234, 0.25);
+            background: white;
+        }
+        
+        .message {
+            margin-bottom: 1.5rem;
+            padding: 1.5rem;
+            border-radius: var(--border-radius);
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(226, 232, 240, 0.3);
+        }
+        
+        .message::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--primary-gradient);
+        }
+        
+        .message.human {
+            background: linear-gradient(135deg, #e6f3ff 0%, #cce7ff 100%);
+            margin-right: 10%;
+            border-left: 4px solid #4facfe;
+        }
+        
+        .message.human::before {
+            background: var(--success-gradient);
+        }
+        
+        .message.gpt {
+            background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
+            margin-left: 10%;
+            border-left: 4px solid #667eea;
+        }
+        
+        .message.system {
+            background: linear-gradient(135deg, #fef5e7 0%, #fed7aa 100%);
+            border-left: 4px solid #f59e0b;
+        }
+        
+        .message.system::before {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        }
+        
+        .message.tools {
+            background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+            border-left: 4px solid #10b981;
+        }
+        
+        .message.tools::before {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+        
+        .message.function_call,
+        .message.observation {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.875rem;
+            margin: 0.5rem 5%;
+            border-left: 4px solid #6b7280;
+        }
+        
+        .message-header {
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .message-header::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--primary-gradient);
+        }
+        
+        .message-content {
+            font-size: 1rem;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-x: auto;
+            color: var(--text-primary);
+        }
+        
+        .message-content .think {
+            color: var(--text-secondary);
+            font-style: italic;
+            opacity: 0.8;
+            font-size: 0.9em;
+            background: rgba(113, 128, 150, 0.1);
+            padding: 0.5rem;
+            border-radius: var(--border-radius-sm);
+            border-left: 3px solid var(--text-secondary);
+            margin: 0.5rem 0;
+            display: block;
+        }
+        
+        .tools-content {
+            background: rgba(16, 185, 129, 0.05);
+            border-radius: var(--border-radius-sm);
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .batch-actions {
+            background: white;
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
+            margin-top: 2rem;
+            box-shadow: var(--box-shadow);
+            border: 1px solid #e2e8f0;
+        }
+         
+         .modal-icon {
+             font-size: 2rem;
+             width: 60px;
+             height: 60px;
+             display: flex;
+             align-items: center;
+             justify-content: center;
+             background: var(--primary-gradient);
+             border-radius: 50%;
+             color: white;
+             box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+         }
+         
+         .badge {
+             border-radius: var(--border-radius-sm);
+             font-weight: 600;
+         }
+         
+         .form-check-input:checked {
+             background-color: var(--primary-color);
+             border-color: var(--primary-color);
+         }
+         
+         .table tbody tr:last-child td {
+             border-bottom: none;
+         }
+         
+         .conversation-container {
+            max-height: 70vh;
+            overflow-y: auto;
+            padding-right: 1rem;
+        }
+        
+        /* DataTable控件样式优化 */
+        .dataTables_length {
+            margin-bottom: 1rem;
+            padding-left: 1rem;
+        }
+        
+        .dataTables_length label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-left: 0.5rem;
+        }
+        
+        .dataTables_filter {
+            margin-bottom: 1rem;
+            text-align: right;
+            padding-right: 1rem;
+        }
+        
+        .dataTables_filter label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            background: #f8fafc;
+            padding: 0.5rem 1rem;
+            border-radius: var(--border-radius-sm);
+            border: 1px solid #e2e8f0;
+            transition: var(--transition);
+        }
+        
+        .dataTables_filter label:hover {
+            background: #f1f5f9;
+            border-color: var(--primary-color);
+        }
+        
+        .dataTables_filter input {
+            border: none;
+            background: transparent;
+            outline: none;
+            min-width: 200px;
+        }
+        
+        .dataTables_filter input:focus {
+            box-shadow: none;
+        }
+        
+        .dataTables_wrapper .row {
+            margin: 0;
+        }
+        
+        .dataTables_wrapper .col-sm-12.col-md-6 {
+            padding: 0 0.75rem;
+        }
+        
+        .dataTables_info {
+            padding-top: 1rem;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+        
+        .dataTables_paginate {
+            padding-top: 1rem;
+        }
+        
+        .dataTables_paginate .pagination {
+            margin: 0;
+            justify-content: flex-end;
+        }
+        
+        @keyframes slideInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+        
+        .loading {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        
+        /* 自定义滚动条样式 */
+        ::-webkit-scrollbar {
+            width: 12px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: rgba(248, 250, 252, 0.5);
+            border-radius: 6px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--primary-gradient);
+            border-radius: 6px;
+            border: 2px solid rgba(248, 250, 252, 0.5);
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-color);
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .container-fluid {
+                padding: 1rem;
+            }
+            
+            .page-title {
+                font-size: 2rem;
+            }
+            
+            .message.human {
+                margin-right: 5%;
+            }
+            
+            .message.gpt {
+                margin-left: 5%;
+            }
+            
+            .btn {
+                padding: 0.5rem 1rem;
+                font-size: 0.8rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- 页面标题 -->
+        <div class="page-header">
+            <h1 class="page-title">对话数据管理系统</h1>
+        </div>
+        
+        <!-- 控制面板 -->
+        <div class="controls-card">
+            <div class="row align-items-center">
+                <div class="col-md-4">
+                    <label for="modelFilter" class="form-label fw-semibold mb-2">筛选模型</label>
+                    <select id="modelFilter" class="form-select">
+                        <option value="">🔍 所有模型</option>
+                    </select>
+                </div>
+                <div class="col-md-8 text-end">
+                    <div class="d-flex justify-content-end gap-2 mt-4">
+                        <span class="badge bg-primary fs-6 px-3 py-2">总记录数: <span id="totalCount">0</span></span>
+                        <span class="badge bg-success fs-6 px-3 py-2">已筛选: <span id="filteredCount">0</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 数据表格 -->
+        <div class="table-container">
+            <div class="table-responsive">
+                <table id="interactionsTable" class="table">
+                    <thead>
+                        <tr>
+                            <th width="50"><input type="checkbox" id="selectAll" class="form-check-input"></th>
+                            <th width="120">📋 ID</th>
+                            <th width="150">🤖 模型</th>
+                            <th>💬 对话预览</th>
+                            <th width="180">⏰ 时间戳</th>
+                            <th width="200">⚡ 操作</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- 批量操作 -->
+        <div class="batch-actions">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="mb-0 fw-bold">批量操作</h5>
+                    <small class="text-muted">选择多个记录进行批量处理</small>
+                </div>
+                <div class="d-flex gap-2">
+                    <button id="batchConfirmBtn" class="btn btn-primary" disabled>
+                        ✅ 批量确认
+                    </button>
+                    <button id="batchDeleteBtn" class="btn btn-danger" disabled>
+                        🗑️ 批量删除
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 详情模态框 -->
+    <div class="modal fade" id="detailModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div class="d-flex align-items-center gap-3">
+                        <div class="modal-icon">
+                            💬
+                        </div>
+                        <div>
+                            <h5 class="modal-title mb-0">对话详情</h5>
+                            <small class="text-muted">查看完整的对话记录</small>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="conversationDetail" class="conversation-container"></div>
+                </div>
+                <div class="modal-footer">
+                    <div class="d-flex justify-content-between w-100">
+                        <div>
+                            <small class="text-muted">💡 提示：可以滚动查看完整对话内容</small>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                                ❌ 关闭
+                            </button>
+                            <button type="button" class="btn btn-danger" id="modalDeleteBtn">
+                                🗑️ 删除
+                            </button>
+                            <button type="button" class="btn btn-primary" id="confirmBtn">
+                                ✅ 确认
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/jquery-3.6.0.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/jquery.dataTables.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/dataTables.bootstrap5.min.js') }}"></script>
+    <script>
+        let currentId = null;
+        let table;
+        let uniqueModels = new Set();
+
+        function formatJSON(obj) {
+            return JSON.stringify(obj, null, 2).replace(/\n/g, '<br>').replace(/ /g, '&nbsp;');
+        }
+
+        $(document).ready(function() {
+            // 初始化DataTable
+            table = $('#interactionsTable').DataTable({
+                ajax: {
+                    url: '/get_interactions',
+                    dataSrc: function(json) {
+                        // 收集所有唯一的模型名称
+                        json.data.forEach(item => uniqueModels.add(item.model));
+                        updateModelFilter();
+                        return json.data;
+                    }
+                },
+                columns: [
+                    {data: null,
+                        render: function() {
+                            return '<input type="checkbox" class="record-checkbox form-check-input">';
+                        }
+                    },
+                    { 
+                        data: 'id',
+                        render: function(data) {
+                            return data.substring(0, 8) + '...';  // 只显示前8位
+                        }
+                    },
+                    { data: 'model' },
+                    { 
+                        data: 'conversation',
+                        render: function(data) {
+                            return '<div class="conversation-preview">' + data + '</div>';
+                        }
+                    },
+                    { data: 'timestamp' },
+                    {
+                        data: null,
+                        render: function(data) {
+                            return '<div class="d-flex gap-1">' +
+                                   '<button class="btn btn-sm btn-info view-btn" data-id="' + data.id + '" title="查看详情">👁️</button>' +
+                                   '<button class="btn btn-sm btn-danger delete-btn" data-id="' + data.id + '" title="删除记录">🗑️</button>' +
+                                   '</div>';
+                        }
+                    }
+                ],
+                order: [[4, 'desc']],
+                language: {
+                    url: 'https://cdn.datatables.net/plug-ins/1.11.5/i18n/zh.json'
+                },
+                drawCallback: function(settings) {
+                    updateRecordCounts();
+                }
+            });
+
+            // 更新模型筛选器选项
+            function updateModelFilter() {
+                const $select = $('#modelFilter');
+                const currentValue = $select.val();
+                $select.empty().append('<option value="">🔍 所有模型</option>');
+                Array.from(uniqueModels).sort().forEach(model => {
+                    $select.append(`<option value="${model}">🤖 ${model}</option>`);
+                });
+                $select.val(currentValue);
+            }
+            
+            // 更新记录计数
+            function updateRecordCounts() {
+                const info = table.page.info();
+                $('#totalCount').text(info.recordsTotal);
+                $('#filteredCount').text(info.recordsDisplay);
+            }
+
+            // 模型筛选事件
+            $('#modelFilter').on('change', function() {
+                const selectedModel = $(this).val();
+                table.column(2).search(selectedModel).draw();
+            });
+
+            // 全选/取消全选
+            $('#selectAll').on('change', function() {
+                const isChecked = $(this).prop('checked');
+                $('.record-checkbox').prop('checked', isChecked);
+                updateBatchConfirmButton();
+            });
+
+            // 单个复选框变化事件
+            $('#interactionsTable').on('change', '.record-checkbox', function() {
+                updateBatchConfirmButton();
+            });
+
+            // 更新批量确认按钮状态
+            function updateBatchConfirmButton() {
+                const checkedCount = $('.record-checkbox:checked').length;
+                $('#batchConfirmBtn').prop('disabled', checkedCount === 0);
+                $('#batchDeleteBtn').prop('disabled', checkedCount === 0);
+            }
+
+            // 批量确认按钮点击事件
+            $('#batchConfirmBtn').click(function() {
+                const selectedIds = [];
+                $('.record-checkbox:checked').each(function() {
+                    const rowData = table.row($(this).closest('tr')).data();
+                    selectedIds.push(rowData.id);
+                });
+
+                if (selectedIds.length === 0) return;
+
+                const confirmBatch = async () => {
+                    for (const id of selectedIds) {
+                        try {
+                            await $.ajax({
+                                url: '/confirm',
+                                method: 'POST',
+                                contentType: 'application/json',
+                                data: JSON.stringify({ id: id })
+                            });
+                        } catch (error) {
+                            console.error(`确认ID ${id} 失败:`, error);
+                        }
+                    }
+                    table.ajax.reload(null, false);
+                    $('#selectAll').prop('checked', false);
+                    updateBatchConfirmButton();
+                };
+
+                confirmBatch();
+            });
+
+            // 批量删除按钮点击事件
+            $('#batchDeleteBtn').click(function() {
+                const selectedIds = [];
+                $('.record-checkbox:checked').each(function() {
+                    const rowData = table.row($(this).closest('tr')).data();
+                    selectedIds.push(rowData.id);
+                });
+
+                if (selectedIds.length === 0) return;
+
+                if (confirm(`确定要删除选中的 ${selectedIds.length} 条记录吗？`)) {
+                    const deleteBatch = async () => {
+                        for (const id of selectedIds) {
+                            try {
+                                await $.ajax({
+                                    url: '/delete',
+                                    method: 'POST',
+                                    contentType: 'application/json',
+                                    data: JSON.stringify({ id: id })
+                                });
+                            } catch (error) {
+                                console.error(`删除ID ${id} 失败:`, error);
+                            }
+                        }
+                        table.ajax.reload(null, false);
+                        $('#selectAll').prop('checked', false);
+                        updateBatchConfirmButton();
+                    };
+
+                    deleteBatch();
+                }
+            });
+
+            // 表格中删除按钮点击事件
+            $('#interactionsTable').on('click', '.delete-btn', function() {
+                const data = table.row($(this).closest('tr')).data();
+                if (confirm('确定要删除这条记录吗？')) {
+                    $.ajax({
+                        url: '/delete',
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({ id: data.id }),
+                        success: function(response) {
+                            if (response.success) {
+                                table.ajax.reload(null, false);
+                            } else {
+                                alert('删除失败：' + (response.error || '未知错误'));
+                            }
+                        },
+                        error: function(xhr) {
+                            let errorMessage = '删除失败';
+                            if (xhr.responseJSON && xhr.responseJSON.error) {
+                                errorMessage += '：' + xhr.responseJSON.error;
+                            }
+                            alert(errorMessage);
+                        }
+                    });
+                }
+            });
+
+            // 工具信息展开/折叠功能
+            $('#conversationDetail').on('click', '.toggle-tools', function() {
+                $(this).closest('.message').find('.tools-content').slideToggle();
+            });
+
+            // 查看按钮点击事件
+            $('#interactionsTable').on('click', '.view-btn', function() {
+                const data = table.row($(this).closest('tr')).data();
+                currentId = data.id;
+                
+                // 格式化对话内容
+                let conversationHtml = '<div class="conversation-container markdown-body">';
+                console.log('点击查看按钮，获取到的行数据:', data);
+                console.log('当前记录ID:', currentId);
+
+                // 先处理system字段
+                if (data.full_conversation && data.full_conversation.system) {
+                    console.log('处理system字段:', data.full_conversation.system);
+                    let systemContent = marked.parse(data.full_conversation.system);
+                    systemContent = systemContent.replace(/<think>(.*?)<\/think>/g, '<span class="think">$1</span>');
+                    conversationHtml += `
+                        <div class="message system">
+                            <div class="message-header">系统</div>
+                            <div class="message-content">${systemContent}</div>
+                        </div>
+                    `;
+                }
+
+                // 处理tools字段
+                if (data.full_conversation && data.full_conversation.tools) {
+                    console.log('处理tools字段:', data.full_conversation.tools);
+                    let toolsContent = JSON.stringify(data.full_conversation.tools, null, 2);
+                    toolsContent = marked.parse('```json\n' + toolsContent + '\n```');
+                    const toolCount = data.full_conversation.tools.length;
+                    conversationHtml += `
+                        <div class="message tools">
+                            <div class="message-header d-flex justify-content-between align-items-center">
+                                <span>可用工具 (${toolCount})</span>
+                                <button class="btn btn-sm btn-outline-primary toggle-tools">展开/折叠</button>
+                            </div>
+                            <div class="message-content tools-content" style="display: none;">${toolsContent}</div>
+                        </div>
+                    `;
+                }
+
+                // 再处理conversations数组
+                if (data.full_conversation && data.full_conversation.conversations) {
+                    console.log('开始处理对话数据，对话数组长度:', data.full_conversation.conversations.length);
+                    data.full_conversation.conversations.forEach((msg, index) => {
+                        console.log(`处理第${index + 1}条消息:`, msg);
+                        const role = msg.from.toLowerCase();
+                        let content = msg.value;
+                        
+                        // 对于function_call类型，尝试解析并格式化JSON
+                        if (role === 'function_call') {
+                            try {
+                                const jsonObj = JSON.parse(content);
+                                content = JSON.stringify(jsonObj, null, 2);
+                                content = marked.parse('```json\n' + content + '\n```');
+                            } catch (e) {
+                                console.error('JSON解析失败:', e);
+                                content = marked.parse(content);
+                            }
+                        } else {
+                            // 其他类型消息正常应用Markdown转换
+                            content = marked.parse(content);
+                        }
+                        console.log(`第${index + 1}条消息转换后:`, content);
+                        // 然后处理<think>标签，替换为<i>标签
+                        content = content.replace(/<think>([\s\S]*?)<\/think>/g, '<span class="think">$1</span>');
+                        
+                        let roleText = '';
+                        let messageClass = role;
+                        
+                        switch(role) {
+                            case 'human':
+                                roleText = '用户';
+                                messageClass = 'human';
+                                break;
+                            case 'assistant':
+                            case 'gpt':
+                                roleText = 'AI';
+                                messageClass = 'gpt';
+                                break;
+                            case 'system':
+                                roleText = '系统';
+                                messageClass = 'system';
+                                break;
+                            case 'function_call':
+                                roleText = '函数调用';
+                                break;
+                            case 'observation':
+                                roleText = '函数返回';
+                                break;
+                            default:
+                                roleText = role;
+                        }
+                        
+                        conversationHtml += `
+                            <div class="message ${messageClass}">
+                                <div class="message-header">${roleText}</div>
+                                <div class="message-content">${content}</div>
+                            </div>
+                        `;
+                    });
+                }
+                conversationHtml += '</div>';
+
+                $('#conversationDetail').html(conversationHtml);
+                new bootstrap.Modal($('#detailModal')).show();
+            });
+
+            // 模态框删除按钮点击事件
+            $('#modalDeleteBtn').click(function() {
+                if (!currentId) return;
+                
+                if (confirm('确定要删除这条记录吗？')) {
+                    $.ajax({
+                        url: '/delete',
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({ id: currentId }),
+                        success: function(response) {
+                            if (response.success) {
+                                $('#detailModal').modal('hide');
+                                table.ajax.reload(null, false);
+                            } else {
+                                alert('删除失败：' + (response.error || '未知错误'));
+                            }
+                        },
+                        error: function(xhr) {
+                            let errorMessage = '删除失败';
+                            if (xhr.responseJSON && xhr.responseJSON.error) {
+                                errorMessage += '：' + xhr.responseJSON.error;
+                            }
+                            alert(errorMessage);
+                        }
+                    });
+                }
+            });
+
+            // 确认按钮点击事件
+            $('#confirmBtn').click(function() {
+                if (!currentId) return;
+                
+                $.ajax({
+                    url: '/confirm',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ id: currentId }),
+                    success: function(response) {
+                        if (response.success) {
+                            $('#detailModal').modal('hide');
+                            table.ajax.reload(null, false);
+                        } else {
+                            alert('操作失败：' + (response.error || '未知错误'));
+                        }
+                    },
+                    error: function(xhr) {
+                        let errorMessage = '操作失败';
+                        if (xhr.responseJSON && xhr.responseJSON.error) {
+                            errorMessage += '：' + xhr.responseJSON.error;
+                        }
+                        alert(errorMessage);
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

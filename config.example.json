@@ -1,0 +1,35 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "log_level": "INFO"
+  },
+  "security": {
+    "max_request_size": 8388608,
+    "allowed_domains": [
+      "api.deepseek.com",
+      "api.siliconflow.cn",
+      "api.moonshot.cn",
+      "deepsearch.jina.ai",
+      "api.openai.com",
+      "api.anthropic.com"
+    ],
+    "blocked_domains": [
+      "localhost",
+      "127.0.0.1",
+      "0.0.0.0",
+      "169.254.169.254",
+      "metadata.google.internal"
+    ]
+  },
+  "database": {
+    "path": "conversations.db",
+    "batch_size": 100,
+    "batch_timeout": 5.0
+  },
+  "http": {
+    "timeout": 30.0,
+    "max_connections": 100,
+    "max_connections_per_host": 10
+  }
+}
