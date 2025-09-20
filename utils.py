@@ -168,6 +168,28 @@ def format_to_sharegpt(model: str, messages: list, response: str, request_data: 
             # 如果没有从request_data中获取到system，则从messages中提取
             if not system_message:
                 system_message = msg["content"] if isinstance(msg["content"], str) else str(msg["content"])
+        elif msg["role"] == "tool":
+            # 将 OpenAI 的工具执行结果映射为 observation
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # 展平为文本
+                parts = []
+                for item in content:
+                    if isinstance(item, dict) and "text" in item:
+                        parts.append(str(item.get("text", "")))
+                    else:
+                        parts.append(str(item))
+                text_content = "\n".join(parts)
+            elif isinstance(content, str):
+                text_content = content
+            else:
+                text_content = str(content)
+            if text_content.strip():
+                conversations.append({
+                    "from": "observation",
+                    "value": text_content.strip()
+                })
+            continue
         else:
             # 将 user 转换为 human，assistant 转换为 gpt
             role = "human" if msg["role"] == "user" else "gpt"

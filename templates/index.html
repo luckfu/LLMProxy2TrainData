@@ -878,6 +878,7 @@
             $('#interactionsTable').on('click', '.view-btn', function() {
                 const data = table.row($(this).closest('tr')).data();
                 currentId = data.id;
+                const conv = data.full_conversation_pretty || data.full_conversation;
                 
                 // 格式化对话内容
                 let conversationHtml = '<div class="conversation-container markdown-body">';
@@ -885,9 +886,9 @@
                 console.log('当前记录ID:', currentId);
 
                 // 先处理system字段
-                if (data.full_conversation && data.full_conversation.system) {
-                    console.log('处理system字段:', data.full_conversation.system);
-                    let systemContent = marked.parse(data.full_conversation.system);
+                if (conv && conv.system) {
+                    console.log('处理system字段:', conv.system);
+                    let systemContent = marked.parse(conv.system);
                     systemContent = systemContent.replace(/<think>(.*?)<\/think>/g, '<span class="think">$1</span>');
                     conversationHtml += `
                         <div class="message system">
@@ -898,11 +899,20 @@
                 }
 
                 // 处理tools字段
-                if (data.full_conversation && data.full_conversation.tools) {
-                    console.log('处理tools字段:', data.full_conversation.tools);
-                    let toolsContent = JSON.stringify(data.full_conversation.tools, null, 2);
+                if (conv && conv.tools) {
+                    console.log('处理tools字段:', conv.tools);
+                    let toolsObj = conv.tools;
+                    if (typeof toolsObj === 'string') {
+                        try { toolsObj = JSON.parse(toolsObj); } catch(e) {}
+                    }
+                    let toolsContent = '';
+                    try {
+                        toolsContent = JSON.stringify(toolsObj, null, 2);
+                    } catch (e) {
+                        toolsContent = String(toolsObj);
+                    }
                     toolsContent = marked.parse('```json\n' + toolsContent + '\n```');
-                    const toolCount = data.full_conversation.tools.length;
+                    const toolCount = Array.isArray(toolsObj) ? toolsObj.length : 0;
                     conversationHtml += `
                         <div class="message tools">
                             <div class="message-header d-flex justify-content-between align-items-center">
@@ -915,25 +925,26 @@
                 }
 
                 // 再处理conversations数组
-                if (data.full_conversation && data.full_conversation.conversations) {
-                    console.log('开始处理对话数据，对话数组长度:', data.full_conversation.conversations.length);
-                    data.full_conversation.conversations.forEach((msg, index) => {
+                if (conv && conv.conversations) {
+                    console.log('开始处理对话数据，对话数组长度:', conv.conversations.length);
+                    conv.conversations.forEach((msg, index) => {
                         console.log(`处理第${index + 1}条消息:`, msg);
                         const role = msg.from.toLowerCase();
                         let content = msg.value;
                         
-                        // 对于function_call类型，尝试解析并格式化JSON
-                        if (role === 'function_call') {
+                        // 对于 function_call / observation 类型，优先尝试作为 JSON 代码块展示
+                        if (role === 'function_call' || role === 'observation') {
+                            let prettyBlock = '';
                             try {
                                 const jsonObj = JSON.parse(content);
-                                content = JSON.stringify(jsonObj, null, 2);
-                                content = marked.parse('```json\n' + content + '\n```');
+                                prettyBlock = JSON.stringify(jsonObj, null, 2);
+                                content = marked.parse('```json\n' + prettyBlock + '\n```');
                             } catch (e) {
-                                console.error('JSON解析失败:', e);
+                                // 如果不是合法 JSON，则按原文本做 Markdown 渲染
                                 content = marked.parse(content);
                             }
                         } else {
-                            // 其他类型消息正常应用Markdown转换
+                            // 其他类型消息正常应用 Markdown 转换
                             content = marked.parse(content);
                         }
                         console.log(`第${index + 1}条消息转换后:`, content);

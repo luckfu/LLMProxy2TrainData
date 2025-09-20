@@ -200,15 +200,134 @@ async def probe_request_middleware(request, handler):
     # 正常请求，继续处理
     return await handler(request)
 
+# ========== 代码层安全中间件（Host/Method/Path/限流/体积/响应头）==========
+import re as _sec_re
+from typing import Dict as _SecDict
+
+# 默认配置（可通过 config.json 覆盖，键路径见下）
+_DEFAULT_SECURITY_CFG = {
+    "allowed_hosts": ["localhost", "127.0.0.1"],  # config.security.allowed_hosts
+    "enforce_host": False,  # 是否启用 Host 白名单校验，默认关闭
+    "allowed_methods": ["GET", "POST", "OPTIONS"],  # config.security.allowed_methods
+    "max_body_size": 1 * 1024 * 1024,  # bytes, config.security.max_body_size
+    "rate": 5.0,   # 每IP每秒补充令牌数，config.security.rate
+    "burst": 20,   # 桶容量，config.security.burst
+    # 常见扫描路径（结合你的日志）
+    "suspicious_patterns": [
+        r"/\+CSCOE\+",
+        r"/cgi-bin/",
+        r"/web/",
+        r"/doc/index\.html$",
+        r"/index\.html$",
+        r"/admin(?:/|$)",
+        r"/manage(?:/|$)",
+        r"/remote/login",
+        r"/login(?:\.html|\.jsp|\.asp|\.htm|/|$)",
+        r"//+",                 # 多重斜杠
+        r"/.*:\d+$",            # /10.1.251.232:8000
+    ],
+    "enforce_json": True  # POST 请求强制 Content-Type: application/json
+}
+
+# 令牌桶
+_RATE_BUCKETS: _SecDict[str, _SecDict[str, float]] = {}
+
+def _get_security_cfg(app) -> dict:
+    cfg = (app.get("config") or {}) if hasattr(app, "get") else {}
+    sec = (cfg.get("security") or {}) if isinstance(cfg, dict) else {}
+    merged = dict(_DEFAULT_SECURITY_CFG)
+    for k, v in sec.items():
+        merged[k] = v
+    return merged
+
+@web.middleware
+async def host_and_method_guard_mw(request: web.Request, handler):
+    sec = _get_security_cfg(request.app)
+    # Host 白名单（仅在开启时生效）
+    if sec.get("enforce_host", False):
+        host = request.headers.get("Host", "")
+        hostname = host.split(":")[0].lower()
+        if hostname not in set(h.lower() for h in sec.get("allowed_hosts", [])):
+            return web.Response(status=403, text="Forbidden")
+    # Method 白名单
+    if request.method not in set(sec["allowed_methods"]):
+        return web.Response(status=405, text="Method Not Allowed")
+    # 可选：POST 必须是 JSON
+    if sec.get("enforce_json", True) and request.method == "POST":
+        ctype = request.headers.get("Content-Type", "")
+        if "application/json" not in ctype:
+            return web.Response(status=415, text="Unsupported Media Type")
+    return await handler(request)
+
+# 预编译恶意路径正则
+_SUSP_RE = [_sec_re.compile(p, _sec_re.I) for p in _DEFAULT_SECURITY_CFG["suspicious_patterns"]]
+
+@web.middleware
+async def path_guard_mw(request: web.Request, handler):
+    sec = _get_security_cfg(request.app)
+    patterns = sec.get("suspicious_patterns") or []
+    # 若配置覆盖了 patterns，重新按配置编译一次
+    regexes = _SUSP_RE if patterns == _DEFAULT_SECURITY_CFG["suspicious_patterns"] else [
+        _sec_re.compile(p, _sec_re.I) for p in patterns
+    ]
+    path = request.rel_url.path
+    for r in regexes:
+        if r.search(path):
+            return web.Response(status=404, text="Not Found")
+    return await handler(request)
+
+def _allow_ip(ip: str, rate: float, burst: int) -> bool:
+    now = time.time()
+    b = _RATE_BUCKETS.get(ip)
+    if b is None:
+        _RATE_BUCKETS[ip] = {"tokens": burst - 1, "ts": now}
+        return True
+    elapsed = now - b["ts"]
+    b["ts"] = now
+    b["tokens"] = min(burst, b["tokens"] + elapsed * rate)
+    if b["tokens"] >= 1.0:
+        b["tokens"] -= 1.0
+        return True
+    return False
+
+@web.middleware
+async def rate_limit_mw(request: web.Request, handler):
+    sec = _get_security_cfg(request.app)
+    rate = float(sec.get("rate", _DEFAULT_SECURITY_CFG["rate"]))
+    burst = int(sec.get("burst", _DEFAULT_SECURITY_CFG["burst"]))
+    xff = request.headers.get("X-Forwarded-For", "")
+    ip = (xff.split(",")[0].strip() if xff else request.remote) or "unknown"
+    if not _allow_ip(ip, rate, burst):
+        return web.Response(status=429, text="Too Many Requests")
+    return await handler(request)
+
+@web.middleware
+async def max_body_mw(request: web.Request, handler):
+    sec = _get_security_cfg(request.app)
+    max_size = int(sec.get("max_body_size", _DEFAULT_SECURITY_CFG["max_body_size"]))
+    cl = request.headers.get("Content-Length")
+    if cl and cl.isdigit() and int(cl) > max_size:
+        return web.Response(status=413, text="Payload Too Large")
+    return await handler(request)
+
+@web.middleware
+async def security_headers_mw(request: web.Request, handler):
+    resp = await handler(request)
+    # 隐匿服务信息与添加安全头
+    resp.headers["Server"] = " "
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    return resp
+
 class DynamicProxyEndpoint:
     """动态代理端点，无需配置文件"""
     
     def __init__(self, port: int = 8080):
         self.port = port
-        self.app = web.Application(middlewares=[probe_request_middleware])
-        self.setup_routes()
-        
-        # 加载配置文件（可选）
+
+        # 先加载配置文件（供安全中间件与 client_max_size 使用）
         self.config = {}
         try:
             if os.path.exists("config.json"):
@@ -216,6 +335,26 @@ class DynamicProxyEndpoint:
                     self.config = json.load(f)
         except Exception:
             self.config = {}
+
+        security_cfg = (self.config.get("security") or {}) if isinstance(self.config, dict) else {}
+        client_max_size = int(security_cfg.get("max_body_size", 1 * 1024 * 1024))
+
+        # 应用与中间件（顺序：快速拒绝 -> 限流/体积 -> 兼容旧探针过滤 -> 安全头）
+        self.app = web.Application(
+            middlewares=[
+                host_and_method_guard_mw,
+                path_guard_mw,
+                rate_limit_mw,
+                max_body_mw,
+                probe_request_middleware,
+                security_headers_mw,
+            ],
+            client_max_size=client_max_size
+        )
+        # 让中间件可读取配置
+        self.app["config"] = self.config
+
+        self.setup_routes()
         
         # 性能优化相关
         self.http_session = None

@@ -5,6 +5,28 @@ import json
 
 app = Flask(__name__)
 
+def ensure_confirmed_table():
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS confirmed_interactions (
+                id TEXT PRIMARY KEY,
+                model TEXT,
+                conversation TEXT,
+                original_timestamp DATETIME,
+                confirmed_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+    finally:
+        conn.close()
+
+# 在首次请求前确保表存在
+@app.before_first_request
+def _init_tables():
+    ensure_confirmed_table()
+
 def get_db_connection():
     conn = sqlite3.connect('interactions.db')
     conn.row_factory = sqlite3.Row
@@ -23,23 +45,56 @@ def get_interactions():
     cursor.execute('SELECT id, model, conversation, timestamp FROM interactions')
     rows = cursor.fetchall()
     
+    def _pretty_or_raw(text: str, indent: int = 2, max_len: int = 8000) -> str:
+        """仅用于展示的美化：能解析JSON则缩进显示，过长添加截断提示"""
+        try:
+            obj = json.loads(text)
+            pretty = json.dumps(obj, ensure_ascii=False, indent=indent)
+        except Exception:
+            pretty = text
+        if isinstance(pretty, str) and len(pretty) > max_len:
+            return pretty[:max_len] + "\n... truncated for display ..."
+        return pretty
+
     # 处理数据
     data = []
     for row in rows:
         try:
             # 解析conversation JSON字符串
             conversation = json.loads(row['conversation'])
-            # 提取对话内容的简短预览
+
+            # 构建仅用于展示的美化版，不修改原始数据
+            conversation_pretty = {
+                "conversations": [],
+                "system": conversation.get("system", ""),
+                "tools": conversation.get("tools", "[]")
+            }
             preview = ''
-            if 'conversations' in conversation:
-                for msg in conversation['conversations']:
-                    preview += f"{msg['from']}: {msg['value'][:50]}...\n"
+            conv_list = conversation.get('conversations', [])
+            if isinstance(conv_list, list):
+                for msg in conv_list:
+                    pretty_msg = dict(msg)
+                    # 仅对 function_call/observation 的 value 做 JSON 美化尝试
+                    if msg.get('from') in ('function_call', 'observation'):
+                        val = msg.get('value', '')
+                        if isinstance(val, str):
+                            pretty_msg['value'] = _pretty_or_raw(val)
+                        else:
+                            pretty_msg['value'] = _pretty_or_raw(str(val))
+                    conversation_pretty['conversations'].append(pretty_msg)
+
+                    # 预览使用美化后的简短文本
+                    pv = pretty_msg.get('value', '')
+                    if not isinstance(pv, str):
+                        pv = str(pv)
+                    preview += f"{pretty_msg.get('from')}: {pv[:50]}...\n"
             
             data.append({
                 'id': row['id'],
                 'model': row['model'],
-                'conversation': preview,
-                'full_conversation': conversation,
+                'conversation': preview,                       # 简短预览（已美化）
+                'full_conversation': conversation,             # 原始数据（训练/导出）
+                'full_conversation_pretty': conversation_pretty,  # 展示用数据
                 'timestamp': row['timestamp']
             })
         except json.JSONDecodeError:
@@ -67,6 +122,30 @@ def delete_interaction():
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
+
+@app.route('/get_confirmed')
+def get_confirmed():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # 确保表存在（防止还未调用 confirm 前就查询）
+    ensure_confirmed_table()
+    cursor.execute('SELECT id, model, conversation, original_timestamp, confirmed_timestamp FROM confirmed_interactions ORDER BY confirmed_timestamp DESC')
+    rows = cursor.fetchall()
+    data = []
+    for row in rows:
+        try:
+            conv = json.loads(row['conversation'])
+        except Exception:
+            conv = row['conversation']
+        data.append({
+            'id': row['id'],
+            'model': row['model'],
+            'full_conversation': conv,
+            'original_timestamp': row['original_timestamp'],
+            'confirmed_timestamp': row['confirmed_timestamp']
+        })
+    conn.close()
+    return jsonify({'data': data})
 
 @app.route('/confirm', methods=['POST'])
 def confirm_interaction():
