@@ -58,8 +58,17 @@ def process_conversations(db_path="interactions.db", output_file="conversations.
                 raise ValueError("对话回合缺少 'from' 或 'value'")
         if "system" not in data or not isinstance(data["system"], str):
             raise ValueError("缺少 'system' 字段或不是字符串")
-        if "tools" not in data or not isinstance(data["tools"], str):
-            raise ValueError("缺少 'tools' 字段或不是字符串")
+        
+        # 修复：允许tools字段为列表或字符串
+        if "tools" not in data:
+            raise ValueError("缺少 'tools' 字段")
+        if isinstance(data["tools"], list):
+            # 如果是列表，转换为JSON字符串
+            data["tools"] = json.dumps(data["tools"], ensure_ascii=False)
+        elif not isinstance(data["tools"], str):
+            raise ValueError("'tools' 字段必须是字符串或列表")
+        
+        # 验证tools字符串是否为有效JSON
         try:
             json.loads(data["tools"])
         except json.JSONDecodeError:
@@ -70,8 +79,8 @@ def process_conversations(db_path="interactions.db", output_file="conversations.
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # 查询 conversation 字段
-        query = "SELECT conversation FROM confirmed_interactions ORDER BY confirmed_timestamp"
+        # 查询 conversation 字段 - 修复：使用正确的表名
+        query = "SELECT conversation FROM interactions ORDER BY timestamp"
         cursor.execute(query)
         rows = cursor.fetchall()
         
@@ -89,11 +98,11 @@ def process_conversations(db_path="interactions.db", output_file="conversations.
                     # 解析 JSON
                     data = json.loads(conversation_str)
                     
-                    # 修复 function_call 格式
-                    data = fix_function_call_format(data)
+                    # 修复 function_call 格式 - 已在保存时处理，这里可以跳过
+                    # data = fix_function_call_format(data)
                     
-                    # 转换 tools
-                    data = convert_tools_to_string(data)
+                    # 转换 tools - 已在保存时处理，这里可以跳过
+                    # data = convert_tools_to_string(data)
                     
                     # 验证
                     validate_data(data)

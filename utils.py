@@ -347,7 +347,7 @@ def format_to_sharegpt(model: str, messages: list, response: str, request_data: 
     return {
         "conversations": conversations,
         "system": system_message,
-        "tools": tools
+        "tools": json.dumps(tools, ensure_ascii=False) if tools else "[]"  # 确保tools是JSON字符串格式
     }
 
 def save_conversation(conn, response_id: str, model: str, conversation: dict):

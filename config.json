@@ -1,7 +1,19 @@
 {
   "allowed_domains": {
+    "api.openai.com": { "auth_type": "openai", "https": true },
+    "api.anthropic.com": { "auth_type": "anthropic", "https": true },
+    "api.moonshot.cn": { "auth_type": "anthropic", "https": true },
+    "api.deepseek.com": { "auth_type": "openai", "https": true },
+    "api.siliconflow.cn": { "auth_type": "openai", "https": true },
+    "dashscope.aliyuncs.com": { "auth_type": "openai", "https": true },
+    "models.inference.ai.azure.com": { "auth_type": "openai", "https": true },
+    "deepsearch.jina.ai": { "auth_type": "openai", "https": true },
+    "newapi.aliyahzombie.top": { "auth_type": "openai", "https": true },
     "generativelanguage.googleapis.com": { "auth_type": "google", "https": true },
-    "api.openai.com": { "auth_type": "openai", "https": true }
+    "ai.da520.online": { "auth_type": "google", "https": true },
+    "36.141.21.137:9081": { "auth_type": "openai", "https": false },
+    "group.sx.10086.cn": { "auth_type": "openai", "https": false },
+    "localhost:9000": { "auth_type": "google", "https": false }
   },
   "probe_request": {
     "path_blocklist": ["/", "/favicon.ico"],
@@ -14,16 +26,19 @@
     "patterns": [
       "GET / HTTP",
       "GET /favicon.ico",
-      "GET /\\.well-known/",
+      "GET \\/\\.well-known\\/",
       "GET /locales/",
       "UNKNOWN / HTTP",
       "CensysInspect",
+      "Mozilla/5\\.0.*Chrome/90\\.0\\.4430\\.85",
       "Go-http-client",
       "BadHttpMessage",
       "BadStatusLine",
       "Invalid method encountered",
       "Pause on PRI/Upgrade",
+      "'NoneType' object is not callable",
       "Task exception was never retrieved",
+      "Error handling request",
       "\\\\x16\\\\x03\\\\x01",
       "bytearray\\(b'\\\\x16\\\\x03\\\\x01"
     ],
@@ -36,10 +51,6 @@
       "167\\.94\\.\\d+\\.\\d+",
       "134\\.195\\.\\d+\\.\\d+",
       "71\\.6\\.\\d+\\.\\d+"
-    ],
-    "custom_patterns": [],
-    "custom_ip_patterns": [],
-    "disable_default_patterns": false,
-    "disable_default_ip_patterns": false
+    ]
   }
 }

@@ -278,14 +278,64 @@ python test_embedding_rerank.py
 - `--port`: 服务器端口 (默认: 8080)
 - `--log-level`: 日志级别 (DEBUG/INFO/WARNING/ERROR)
 
+### config.json 配置
+- 位置与加载时机：程序启动时在工作目录加载 config.json；未提供时使用内置最小默认并安全回退
+- 不改变透传：所有配置仅影响允许的目标域名与过滤策略；网络路径上的上游响应仍“原样透传”（SSE/非流式）
+- 字段结构：
+  - allowed_domains：域名白名单与认证映射
+    - 作用：完全覆盖内置最小白名单（代码内仅保留 generativelanguage.googleapis.com 与 api.openai.com）
+    - 格式：{ "domain": { "auth_type": "openai|google|anthropic", "https": true|false } }
+  - probe_request：中间件层面的“探针请求”拦截规则
+    - path_blocklist: ["/", "/favicon.ico"]
+    - path_prefix_blocklist: ["/.well-known/", "/locales/"]
+    - user_agent_substrings: ["CensysInspect", "Go-http-client"]
+    - allowed_methods: ["GET","POST","PUT","DELETE","PATCH","OPTIONS"]
+    - ip_blocklist: ["..."] 仅在你需要静默屏蔽特定来源时使用
+  - probe_filter：日志过滤器（对 aiohttp.access/aiohttp.server/asyncio 日志做“探针/噪音”过滤）
+    - patterns/ip_patterns：直接覆盖默认规则（推荐）
+    - custom_patterns/custom_ip_patterns：在默认规则基础上追加
+    - disable_default_patterns/disable_default_ip_patterns：禁用内置默认，再按 custom_* 使用
+
+示例 config.json 片段：
+```json
+{
+  "allowed_domains": {
+    "generativelanguage.googleapis.com": { "auth_type": "google", "https": true },
+    "api.openai.com": { "auth_type": "openai", "https": true },
+    "api.deepseek.com": { "auth_type": "openai", "https": true }
+  },
+  "probe_request": {
+    "path_blocklist": ["/", "/favicon.ico"],
+    "path_prefix_blocklist": ["/.well-known/", "/locales/"],
+    "user_agent_substrings": ["CensysInspect", "Go-http-client"],
+    "allowed_methods": ["GET","POST","PUT","DELETE","PATCH","OPTIONS"],
+    "ip_blocklist": ["193.34.212.110","185.191.127.222"]
+  },
+  "probe_filter": {
+    "patterns": [
+      "GET / HTTP",
+      "GET /favicon.ico",
+      "GET \\/\\.well-known\\/",
+      "Go-http-client",
+      "BadHttpMessage"
+    ],
+    "ip_patterns": [
+      "193\\.34\\.212\\.\\d+",
+      "185\\.191\\.127\\.\\d+"
+    ]
+  }
+}
+```
+
 ### 扩展白名单
-
-如需添加新的域名，修改 `allowed_domains` 字典：
-
-```python
-self.allowed_domains = {
-    'new-api.example.com': {'auth_type': 'openai', 'https': True},
-    # ... 其他域名
+请编辑 config.json 的 allowed_domains（优先级高于代码内置最小白名单）：
+```json
+{
+  "allowed_domains": {
+    "generativelanguage.googleapis.com": { "auth_type": "google", "https": true },
+    "api.openai.com": { "auth_type": "openai", "https": true },
+    "new-api.example.com": { "auth_type": "openai", "https": true }
+  }
 }
 ```
 
@@ -326,32 +376,13 @@ GET http://localhost:8080/health
 
 ## 🆚 优势对比
 
-### 传统配置文件方式
-```json
-{
-  "endpoints": {
-    "provider": {
-      "base_url": "https://api.example.com",
-      "models": ["model1", "model2"],
-      "auth_type": "bearer"
-    }
-  }
-}
-```
-
-**缺点**:
-- 需要预先配置
-- 添加新API需要修改配置文件
-- 需要重启服务
-- 配置文件维护成本高
-
 ### 动态代理方式
 ```
 POST /api.example.com/v1/chat/completions
 ```
 
 **优点**:
-- 无需配置文件
+- 无需预置复杂配置（支持即插即用）；也支持可选的 config.json 扩展
 - 即插即用
 - 支持任意符合格式的API
 - 自动识别认证类型
