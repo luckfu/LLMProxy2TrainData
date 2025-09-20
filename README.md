@@ -113,6 +113,7 @@ else:
 | `api.siliconflow.cn` | OpenAI | HTTPS | SiliconFlow API |
 | `dashscope.aliyuncs.com` | OpenAI | HTTPS | 阿里云百炼API |
 | `models.inference.ai.azure.com` | OpenAI | HTTPS | GitHub Models |
+| `generativelanguage.googleapis.com` | Google | HTTPS | Google AI (Gemini) |
 
 
 ## 📝 API调用示例
@@ -145,6 +146,57 @@ curl -X POST "http://localhost:8080/api.moonshot.cn/anthropic/v1/messages" \
     "max_tokens": 100
   }'
 ```
+
+### Google AI（Gemini）接口
+
+支持两种使用方式：
+
+1) OpenAI 兼容入口（代理自动转换为 Google generateContent）
+```bash
+curl -X POST "http://localhost:8080/v1/chat/completions" \
+  -H "Authorization: Bearer ${GOOGLE_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.0-flash-exp",
+    "messages": [
+      {"role": "user", "content": "用三句话介绍量子计算"}
+    ]
+  }'
+```
+
+- 说明：代理会将 OpenAI 风格的 messages 自动转换为 Google 的 contents/parts，并调用
+  POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
+- 流式：当 body 中包含 "stream": true 时，会自动改为
+  POST ...:streamGenerateContent 并以 SSE 透传
+
+2) 动态代理直连 Google 域名（原生 Google 路径）
+```bash
+curl -X POST "http://localhost:8080/generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent" \
+  -H "Authorization: Bearer ${GOOGLE_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contents": [
+      {"role": "user", "parts": [{"text": "用三句话介绍量子计算"}]}
+    ]
+  }'
+```
+
+- 流式示例（原生 Google 路径）：
+```bash
+curl -N -X POST "http://localhost:8080/generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:streamGenerateContent" \
+  -H "Authorization: Bearer ${GOOGLE_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contents": [
+      {"role": "user", "parts": [{"text": "给我一个Python异步示例"}]}
+    ]
+  }'
+```
+
+注意：
+- 使用 OpenAI 兼容入口时，务必将 model 设置为有效的 Gemini 模型名（例如 gemini-2.0-flash-exp）
+- Authorization 头里使用 Google 的 API Key（Bearer ${GOOGLE_API_KEY}）
+- 代理会统一保存对话为 ShareGPT 格式，并记录工具调用等元信息
 
 ### 文本嵌入API
 
