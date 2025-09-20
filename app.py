@@ -71,7 +71,13 @@ def get_interactions():
             }
             preview = ''
             conv_list = conversation.get('conversations', [])
+            # 计算是否为“仅工具调用”记录：存在 function_call，且不存在 gpt/assistant 文本项
+            function_call_only = False
             if isinstance(conv_list, list):
+                has_function_call = any(isinstance(m, dict) and m.get('from') == 'function_call' for m in conv_list)
+                has_gpt_text = any(isinstance(m, dict) and m.get('from') in ('gpt', 'assistant') for m in conv_list)
+                function_call_only = bool(has_function_call and not has_gpt_text)
+
                 for msg in conv_list:
                     pretty_msg = dict(msg)
                     # 仅对 function_call/observation 的 value 做 JSON 美化尝试
@@ -95,6 +101,7 @@ def get_interactions():
                 'conversation': preview,                       # 简短预览（已美化）
                 'full_conversation': conversation,             # 原始数据（训练/导出）
                 'full_conversation_pretty': conversation_pretty,  # 展示用数据
+                'function_call_only': function_call_only,       # 新增：仅工具调用标记
                 'timestamp': row['timestamp']
             })
         except json.JSONDecodeError:
@@ -137,10 +144,22 @@ def get_confirmed():
             conv = json.loads(row['conversation'])
         except Exception:
             conv = row['conversation']
+
+        # 计算 confirmed 记录是否为“仅工具调用”
+        function_call_only = False
+        try:
+            conv_list = conv.get('conversations', []) if isinstance(conv, dict) else []
+            has_function_call = any(isinstance(m, dict) and m.get('from') == 'function_call' for m in conv_list)
+            has_gpt_text = any(isinstance(m, dict) and m.get('from') in ('gpt', 'assistant') for m in conv_list)
+            function_call_only = bool(has_function_call and not has_gpt_text)
+        except Exception:
+            function_call_only = False
+
         data.append({
             'id': row['id'],
             'model': row['model'],
             'full_conversation': conv,
+            'function_call_only': function_call_only,
             'original_timestamp': row['original_timestamp'],
             'confirmed_timestamp': row['confirmed_timestamp']
         })

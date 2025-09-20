@@ -9,6 +9,9 @@ import argparse
 from typing import Dict, Any, Optional
 import traceback
 
+# 流式日志采样频率（每收到 N 条增量打印一次调试日志）
+STREAM_DEBUG_SAMPLE_N = 50
+
 
 from utils import format_to_sharegpt, init_async_logger, get_async_logger, init_db_path, get_db_connection, save_conversation_async
 import re
@@ -806,6 +809,12 @@ class DynamicProxyEndpoint:
         complete_response = ""
         complete_reasoning = ""
         response_id = None
+        # Anthropic 工具流式解析状态
+        anthropic_tool_current = None
+        anthropic_tool_calls = []
+        anthropic_stop_reason = None
+        # 降噪：高频片段日志采样
+        stream_debug_counter = 0
         
         try:
             async for line in resp.content:
@@ -830,17 +839,78 @@ class DynamicProxyEndpoint:
                 line_str = line_text.strip()
                 
                 if line_str:
-                    # 调试：打印接收到的流式数据
-                    await self.async_logger.debug(f"🔍 调试 - 接收到流式数据: {line_str[:200]}...")
+                    # 调试：高频采样打印，降低噪声
+                    stream_debug_counter += 1
+                    if stream_debug_counter % STREAM_DEBUG_SAMPLE_N == 1:
+                        await self.async_logger.debug(f"🔍 调试 - 接收到流式数据: {line_str[:200]}...")
                     
                     # 解析响应内容
                     if auth_type == "anthropic":
-                        chunk_reasoning = ""
-                        complete_response, response_id, chunk_reasoning = self._parse_anthropic_stream_chunk(
+                        # 直接解析 JSON 事件，捕获工具调用
+                        if line_str.startswith("data: "):
+                            data_str = line_str[6:].strip()
+                            try:
+                                evt = json.loads(data_str)
+                                etype = evt.get("type")
+                                # 消息开始，记录 id
+                                if etype == "message_start" and "message" in evt and not response_id:
+                                    mid = evt["message"].get("id")
+                                    if mid:
+                                        response_id = mid
+                                # 文本增量
+                                elif etype == "content_block_delta":
+                                    delta = evt.get("delta", {})
+                                    if delta.get("type") == "text_delta":
+                                        text = delta.get("text", "")
+                                        if isinstance(text, str):
+                                            complete_response += text
+                                    # 工具输入 JSON 增量
+                                    elif delta.get("type") == "input_json_delta":
+                                        pj = delta.get("partial_json", "")
+                                        if anthropic_tool_current is not None and isinstance(pj, str):
+                                            anthropic_tool_current["input_json"] += pj
+                                # 工具块开始
+                                elif etype == "content_block_start":
+                                    block = evt.get("content_block", {})
+                                    if block.get("type") == "tool_use":
+                                        anthropic_tool_current = {
+                                            "id": block.get("id"),
+                                            "name": block.get("name"),
+                                            "input_json": ""
+                                        }
+                                # 工具块结束，组装一次调用
+                                elif etype == "content_block_stop":
+                                    if anthropic_tool_current is not None:
+                                        args_text = anthropic_tool_current.get("input_json", "") or ""
+                                        # 尝试解析为对象；失败则保留原字符串
+                                        try:
+                                            parsed_args = json.loads(args_text) if args_text else {}
+                                        except Exception:
+                                            parsed_args = args_text
+                                        tool_call = {
+                                            "id": anthropic_tool_current.get("id") or str(uuid.uuid4()),
+                                            "type": "function",
+                                            "function": {
+                                                "name": anthropic_tool_current.get("name") or "unknown_tool",
+                                                "arguments": json.dumps(parsed_args, ensure_ascii=False)
+                                            }
+                                        }
+                                        anthropic_tool_calls.append(tool_call)
+                                        anthropic_tool_current = None
+                                # 消息增量（可含 stop_reason）
+                                elif etype == "message_delta":
+                                    delta = evt.get("delta", {})
+                                    sr = delta.get("stop_reason")
+                                    if sr:
+                                        anthropic_stop_reason = sr
+                                # 其余事件忽略
+                            except Exception:
+                                # 单事件解析失败不影响透传
+                                pass
+                        # 同时复用现有解析以兼容只文本的情况
+                        complete_response, response_id, _ = self._parse_anthropic_stream_chunk(
                             line_str, complete_response, response_id
                         )
-                        if chunk_reasoning:
-                            complete_reasoning += chunk_reasoning
                     elif auth_type == "google":
                         chunk_reasoning = ""
                         complete_response, response_id, chunk_reasoning = await self._parse_google_stream_chunk(
@@ -862,7 +932,13 @@ class DynamicProxyEndpoint:
         
         finally:
             # 保存对话 - 处理不同API格式的消息转换
-            if response_id and complete_response:
+            # 修改：当存在工具调用时（Anthropic stop_reason=tool_use），即使没有可见文本也保存
+            save_due_to_tool = (auth_type == "anthropic" and len(anthropic_tool_calls) > 0)
+            if response_id and (complete_response or save_due_to_tool):
+                # 审计：仅工具调用也保存时打印 INFO
+                if save_due_to_tool and not complete_response:
+                    tool_names = ", ".join([tc.get("function", {}).get("name", "unknown_tool") for tc in anthropic_tool_calls]) or "unknown_tool"
+                    await self.async_logger.info(f"📌 保存于工具阶段（function_call-only），数量={len(anthropic_tool_calls)}，工具={tool_names}")
                 # 处理不同API格式的消息转换
                 messages = []
                 if auth_type == "google":
@@ -884,11 +960,22 @@ class DynamicProxyEndpoint:
                     # OpenAI/Anthropic格式
                     messages = request_data.get('messages', [])
                 
-                # 存档：仅在 OpenAI 或 Google 且存在结构化思考时附加<think>，不做启发式
+                # 存档：
+                # - OpenAI/Google：有结构化思考时附加<think>
+                # - Anthropic：若有工具调用，追加标记以便 utils.format_to_sharegpt 抽取为 function_call
                 if auth_type in ("openai", "google") and complete_reasoning:
                     formatted_response = f"<think>\n{complete_reasoning}\n</think>\n\n{complete_response}"
                 else:
                     formatted_response = complete_response
+                if auth_type == "anthropic" and len(anthropic_tool_calls) > 0:
+                    try:
+                        marker = json.dumps(anthropic_tool_calls, ensure_ascii=False)
+                    except Exception:
+                        marker = "[]"
+                    # 在回复末尾追加工具调用标记，供后续解析
+                    append_text = f"\n[ANTHROPIC_TOOL_CALLS: {marker}]"
+                    # 如果完全没有可见文本，也要有最小占位，方便前端显示
+                    formatted_response = (formatted_response or "") + append_text
                 
                 # 调试：打印最终保存的内容
                 await self.async_logger.debug(f"🔍 调试 - 流式响应最终内容长度: {len(formatted_response)}")

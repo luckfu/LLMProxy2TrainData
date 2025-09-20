@@ -602,6 +602,7 @@
                             <th width="120">📋 ID</th>
                             <th width="150">🤖 模型</th>
                             <th>💬 对话预览</th>
+                            <th width="140">🏷️ 标签</th>
                             <th width="180">⏰ 时间戳</th>
                             <th width="200">⚡ 操作</th>
                         </tr>
@@ -713,6 +714,12 @@
                         data: 'conversation',
                         render: function(data) {
                             return '<div class="conversation-preview">' + data + '</div>';
+                        }
+                    },
+                    { 
+                        data: 'function_call_only',
+                        render: function(flag) {
+                            return flag ? '<span class="badge bg-success">FunctionCall&nbsp;Only</span>' : '';
                         }
                     },
                     { data: 'timestamp' },
@@ -879,6 +886,14 @@
                 const data = table.row($(this).closest('tr')).data();
                 currentId = data.id;
                 const conv = data.full_conversation_pretty || data.full_conversation;
+
+                // 设置模态标题徽章
+                const $title = $('.modal-title');
+                if (data.function_call_only) {
+                    $title.html('对话详情 <span class="badge bg-success ms-2">FunctionCall&nbsp;Only</span>');
+                } else {
+                    $title.text('对话详情');
+                }
                 
                 // 格式化对话内容
                 let conversationHtml = '<div class="conversation-container markdown-body">';
