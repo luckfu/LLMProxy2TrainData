@@ -374,36 +374,13 @@ class DynamicProxyEndpoint:
         return request_data.get("model", "unknown")
     
     def prepare_auth_headers(self, request_headers: Dict[str, str], auth_type: str) -> Dict[str, str]:
-        """根据认证类型准备请求头"""
-        base_headers = {"Content-Type": "application/json"}
-        
-        if auth_type == "anthropic":
-            # Anthropic认证处理
-            auth_header = request_headers.get("Authorization", "")
-            api_key = ""
-            if auth_header.startswith("Bearer "):
-                api_key = auth_header.replace("Bearer ", "").strip()
-            elif request_headers.get("x-api-key"):
-                api_key = request_headers.get("x-api-key")
-            
-            base_headers["Authorization"] = f"Bearer {api_key}"
-        elif auth_type == "google":
-            # Google API认证处理
-            auth_header = request_headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                base_headers["Authorization"] = auth_header
-            else:
-                # 如果没有Bearer token，尝试从x-goog-api-key获取
-                api_key = request_headers.get("x-goog-api-key", "")
-                if api_key:
-                    base_headers["x-goog-api-key"] = api_key
-                else:
-                    base_headers["Authorization"] = auth_header
-        else:
-            # OpenAI及其他API认证处理
-            base_headers["Authorization"] = request_headers.get("Authorization", "")
-        
-        return base_headers
+        """根据认证类型准备请求头：保留 Authorization 与所有 x-* 头，补充 Content-Type"""
+        forward_headers: Dict[str, str] = {"Content-Type": "application/json"}
+        for k, v in request_headers.items():
+            kl = k.lower()
+            if kl == "authorization" or kl.startswith("x-"):
+                forward_headers[k] = v
+        return forward_headers
     
     def is_domain_allowed(self, domain: str) -> bool:
         """检查域名是否在白名单中"""
