@@ -669,7 +669,7 @@ class DynamicProxyEndpoint:
                     break
                 try:
                     await response.write(line)
-                    await response.drain()
+                  
                 except (ConnectionResetError, BrokenPipeError, aiohttp.ClientConnectionResetError, asyncio.CancelledError):
                     await self.async_logger.info("🔌 客户端断开连接，停止写入")
                     break
