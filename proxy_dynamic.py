@@ -273,6 +273,14 @@ async def path_guard_mw(request: web.Request, handler):
     path = request.rel_url.path
     for r in regexes:
         if r.search(path):
+            # 对“连续多斜杠”给出更友好的提示，便于用户修正
+            if r.pattern == r"//+" and path.startswith("//"):
+                err = {
+                    "error": "路径包含连续斜杠，请改为单斜杠",
+                    "hint": "示例：/api.openai.com/v1/chat/completions 或 /generativelanguage.googleapis.com/...",
+                    "note": "如目标域名未在白名单，请在 config.json 的 allowed_domains 中添加"
+                }
+                return web.Response(status=400, text=json.dumps(err, ensure_ascii=False), headers={"Content-Type": "application/json"})
             return web.Response(status=404, text="Not Found")
     return await handler(request)
 

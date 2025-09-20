@@ -9,7 +9,8 @@
     "newapi.aliyahzombie.top": { "auth_type": "openai", "https": true },
     "generativelanguage.googleapis.com": { "auth_type": "google", "https": true },
     "ai.da520.online": { "auth_type": "google", "https": true },
-    "open.bigmodel.cn": { "auth_type": "openai", "https": true }
+    "open.bigmodel.cn": { "auth_type": "openai", "https": true },
+    "sdwfger.edu.kg": { "auth_type": "openai", "https": true }
   },
   "probe_request": {
     "path_blocklist": ["/", "/favicon.ico"],
