@@ -6,16 +6,16 @@ import uuid
 from aiohttp import web
 import aiohttp
 import argparse
-from typing import Dict, Any, Optional, Set
+from typing import Dict, Any, Optional
 import traceback
-import sqlite3
-import aiosqlite
+
+
 from utils import format_to_sharegpt, init_async_logger, get_async_logger, init_db_path, get_db_connection, save_conversation_async
 import re
 from aiohttp.web_middlewares import middleware
-from collections import defaultdict, deque
-import hashlib
-from urllib.parse import urlparse
+
+
+
 import os
 
 # 自定义日志过滤器，屏蔽探针请求的日志
@@ -26,38 +26,10 @@ class ProbeRequestFilter(logging.Filter):
         super().__init__()
         
         # 默认探针请求的特征模式
-        default_patterns = [
-            r'GET / HTTP',  # 根路径探测
-            r'GET /favicon.ico',  # 图标请求
-            r'GET /\.well-known/',  # 安全文件探测
-            r'GET /locales/',  # 本地化文件探测
-            r'UNKNOWN / HTTP',  # 未知协议请求
-            r'CensysInspect',  # Censys扫描器
-            r'Mozilla/5\.0.*Chrome/90\.0\.4430\.85',  # 特定的探针User-Agent
-            r'Go-http-client',  # Go客户端探测
-            r'BadHttpMessage',  # HTTP协议错误
-            r'BadStatusLine',  # HTTP状态行错误
-            r'Invalid method encountered',  # 无效HTTP方法
-            r'Pause on PRI/Upgrade',  # HTTP/2升级错误
-            r"'NoneType' object is not callable",  # 空对象调用错误
-            r'Task exception was never retrieved',  # 异步任务异常
-            r'Error handling request',  # 请求处理错误
-            r'\\x16\\x03\\x01',  # SSL/TLS握手数据
-            r'bytearray\(b\'\\x16\\x03\\x01',  # SSL握手字节数组
-        ]
+        default_patterns = []
         
         # 默认探针IP地址模式（使用更通用的模式）
-        default_probe_ips = [
-            r'193\.34\.212\.\d+',  # Censys扫描器IP段
-            r'185\.191\.127\.\d+',  # 常见扫描器IP段
-            r'162\.142\.125\.\d+',  # 常见扫描器IP段
-            r'194\.62\.248\.\d+',   # 常见扫描器IP段
-            r'209\.38\.219\.\d+',   # 常见扫描器IP段
-            # 添加更多常见的扫描器IP段
-            r'167\.94\.\d+\.\d+',   # DigitalOcean扫描器
-            r'134\.195\.\d+\.\d+',  # 学术机构扫描器
-            r'71\.6\.\d+\.\d+',     # 商业扫描器
-        ]
+        default_probe_ips = []
         
         # 尝试从配置文件加载自定义模式
         self.probe_patterns = default_patterns.copy()
@@ -657,11 +629,40 @@ class DynamicProxyEndpoint:
             return web.Response(status=500, text=json.dumps({"error": "服务器内部错误"}))
     
     async def _validate_request_size(self, request_data: Dict[str, Any]) -> bool:
-        """验证请求体大小"""
-        messages = request_data.get("messages", [])
-        total_chars = sum(len(str(msg)) for msg in messages)
+        """验证请求体大小（兼容 OpenAI messages 与 Google contents.parts）"""
         max_chars = 8000000
-        
+        total_chars = 0
+
+        # OpenAI/Anthropic 风格
+        messages = request_data.get("messages", [])
+        if isinstance(messages, list) and messages:
+            try:
+                for msg in messages:
+                    if isinstance(msg, dict):
+                        # 只统计主要文本
+                        total_chars += len(str(msg.get("content", "")))
+                    else:
+                        total_chars += len(str(msg))
+            except Exception:
+                total_chars += len(str(messages))
+
+        # Google Gemini 风格
+        if total_chars == 0:
+            contents = request_data.get("contents", [])
+            if isinstance(contents, list) and contents:
+                try:
+                    for content in contents:
+                        if isinstance(content, dict):
+                            parts = content.get("parts", [])
+                            if isinstance(parts, list):
+                                for part in parts:
+                                    if isinstance(part, dict):
+                                        t = part.get("text")
+                                        if isinstance(t, str):
+                                            total_chars += len(t)
+                except Exception:
+                    total_chars += len(str(contents))
+
         if total_chars > max_chars:
             await self.async_logger.warning(
                 f"❌ 请求体过大: {total_chars} 字符，超过限制 {max_chars} 字符"
@@ -1251,8 +1252,10 @@ class DynamicProxyEndpoint:
                 await asyncio.sleep(1)
     
     async def _save_batch(self, batch):
-        """保存一批对话"""
+        """保存一批对话（复用单个 DB 连接提升性能）"""
+        db_conn = None
         try:
+            db_conn = await get_db_connection()
             for conversation_data in batch:
                 # 检查数据结构
                 if not isinstance(conversation_data, dict):
@@ -1286,20 +1289,24 @@ class DynamicProxyEndpoint:
                 # 调试：打印格式化后的数据
                 await self.async_logger.debug(f"🔍 调试 - 格式化后的ShareGPT数据: {json.dumps(sharegpt_data, ensure_ascii=False, indent=2)}")
                 
-                # 保存到数据库
-                db_conn = await get_db_connection()
+                # 保存到数据库（复用连接）
                 await save_conversation_async(
                     db_conn,
                     conversation_data.get('id', str(uuid.uuid4())),
                     conversation_data.get('model', 'unknown'),
                     sharegpt_data
                 )
-                await db_conn.close()
             
             await self.async_logger.info(f"✅ 成功保存 {len(batch)} 条对话")
             
         except Exception as e:
             await self.async_logger.error(f"保存对话批次失败: {e}\n{traceback.format_exc()}")
+        finally:
+            if db_conn is not None:
+                try:
+                    await db_conn.close()
+                except Exception:
+                    pass
     
     async def handle_health_check(self, request: web.Request) -> web.Response:
         """健康检查端点"""
