@@ -1,6 +1,6 @@
-# LLM Proxy ShareGPT
+# LLM Proxy to Train Data
 
-一个功能强大的AI训练数据收集解决方案，集成动态代理服务器、对话记录管理和ShareGPT格式数据导出。
+一个功能强大的AI训练数据收集解决方案，集成动态代理服务器、对话记录管理和ShareGPT/OpenAI 格式数据导出。
 
 ## 🚀 核心特性
 
@@ -60,13 +60,107 @@ python app.py
 
 ### 3. 导出训练数据（可选）
 
+支持两种导出格式：
+- sharegpt：ShareGPT 扩展格式（包含 function_call/observation 与顶层 tools 字段，tools 为 JSON 字符串）
+- openai：OpenAI Chat 格式（messages 为 role=user/assistant/tool；当存在工具调用时包含 assistant.tool_calls，且可在顶层附带 tools 工具签名）
+
+基础用法：
 ```bash
-# 使用导出脚本（推荐）
+# 使用导出脚本（如存在）
 ./export_data.sh
 
-# 或者直接运行
-python process_conversations.py
+# 或直接运行导出器（默认导出 ShareGPT 扩展格式）
+python process_conversations.py \
+  --db interactions.db \
+  --table interactions \
+  --output conversations_sharegpt.jsonl \
+  --invalid invalid_conversations.jsonl \
+  --format sharegpt
 ```
+
+常用参数：
+- --db 默认 interactions.db
+- --table interactions | confirmed_interactions
+- --output 有效样本导出文件
+- --invalid 无效样本导出文件（保留原样，便于排查）
+- --max-records N 最多导出 N 条（0 表示不限制）
+- --truncate-observation N 导出时对 observation.value 截断展示，避免过长（不改数据库）
+- --only-function-call-only 仅导出“以工具调用结束”的样本（fc-only）
+- --model-filter 子串 仅导出模型名包含该子串的记录
+- --format sharegpt | openai 导出格式
+- --tools-schema auto|yes|no|derive（仅 openai 格式生效）
+  - auto（默认）：若原始数据含有效 tools 列表，透传；否则在存在工具调用时基于 arguments 推导最小签名；无工具调用则不附 tools
+  - yes：无论是否包含工具调用，尽量附上 tools（透传或推导）
+  - no：不附 tools
+  - derive：忽略原始 tools，完全基于会话中的工具调用 arguments 推导
+
+OpenAI Chat 格式导出示例（建议）：
+```bash
+# 1) 混合数据（既有普通对话也有含工具的对话），自动附 tools
+python process_conversations.py \
+  --format openai \
+  --tools-schema auto \
+  --max-records 1000 \
+  --output conversations_openai_mixed.jsonl \
+  --invalid invalid_openai_mixed.jsonl
+
+# 2) 仅导出 function_call-only（以工具调用结束，无后续助手文本）
+python process_conversations.py \
+  --only-function-call-only \
+  --format openai \
+  --tools-schema auto \
+  --max-records 100 \
+  --output conversations_openai_fc_only.jsonl \
+  --invalid invalid_openai_fc_only.jsonl
+```
+
+数据结构要点（openai 格式）：
+- assistant.tool_calls 是数组，元素形如：
+  {"id":"Read_0","type":"function","function":{"name":"Read","arguments":"{\"file_path\":\"/abs/path\"}"}}
+  注意：arguments 必须为 JSON 字符串
+- 工具返回用 role:"tool" 消息表示，并用 tool_call_id 与上面的 tool_calls.id 配对
+- 顶层仅保留 messages 与（在需要时）tools，未包含 model 等冗余键，更通用
+- function_call-only 判定基于“最后一轮”：最后一个 from==function_call（之后无 gpt/assistant 文本）
+
+快速校验示例：
+```bash
+# 取首条样本并打印顶层键（应仅有 messages 和可能的 tools）
+python3 -c "import json; d=json.loads(open('conversations_openai_fc_only.jsonl','r',encoding='utf-8').readline()); print(sorted(d.keys()))"
+
+# 抽一条包含 role:tool 的样本，检查 tool_calls.id 与 tool.tool_call_id 配对
+python3 - <<'PY'
+import json
+path='conversations_openai_mixed.jsonl'
+with open(path,'r',encoding='utf-8') as f:
+    for line in f:
+        d=json.loads(line)
+        msgs=d.get('messages',[])
+        t=next((m for m in msgs if isinstance(m,dict) and m.get('role')=='tool'),None)
+        if not t: 
+            continue
+        tc=next((m.get('tool_calls') for m in msgs if isinstance(m,dict) and m.get('role')=='assistant' and m.get('tool_calls')),[])
+        print(json.dumps({
+            'assistant_tool_calls': tc,
+            'first_tool_message': {'tool_call_id': t.get('tool_call_id'), 'content': (t.get('content')[:200]+'...') if isinstance(t.get('content'),str) and len(t.get('content'))>200 else t.get('content')},
+            'tools': d.get('tools',[])
+        }, ensure_ascii=False, indent=2))
+        break
+PY
+```
+
+ShareGPT 扩展格式导出示例：
+```bash
+python process_conversations.py \
+  --format sharegpt \
+  --max-records 1000 \
+  --output conversations_sharegpt.jsonl \
+  --invalid invalid_sharegpt.jsonl
+```
+
+注意事项：
+- openai 与 sharegpt 两种格式可自由选择；若你的训练/对齐框架支持工具调用，推荐 openai 格式并开启 --tools-schema auto
+- 若你的加载器需要 arguments 为对象而非字符串，可在加载阶段反序列化；导出时保持字符串与 OpenAI 规范一致
+- 导出前可使用 --truncate-observation 防止极长的工具返回影响阅读或加载
 
 ## 🔧 动态代理原理
 

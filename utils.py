@@ -190,6 +190,37 @@ def format_to_sharegpt(model: str, messages: list, response: str, request_data: 
                     "value": text_content.strip()
                 })
             continue
+        elif msg["role"] == "function_call":
+            # 直接记录为 function_call（content 建议为 {"name":..., "arguments":...} 的 JSON 串）
+            fc_content = msg.get("content", "")
+            if not isinstance(fc_content, str):
+                try:
+                    fc_content = json.dumps(fc_content, ensure_ascii=False)
+                except Exception:
+                    fc_content = str(fc_content)
+            conversations.append({
+                "from": "function_call",
+                "value": fc_content
+            })
+            continue
+        elif msg["role"] in ("function", "tool_response"):
+            # 工具返回，映射为 observation
+            fr_content = msg.get("content", "")
+            if isinstance(fr_content, list):
+                parts = []
+                for item in fr_content:
+                    parts.append(item.get("text", "") if isinstance(item, dict) else str(item))
+                fr_text = "\n".join(parts)
+            elif isinstance(fr_content, str):
+                fr_text = fr_content
+            else:
+                fr_text = str(fr_content)
+            if fr_text.strip():
+                conversations.append({
+                    "from": "observation",
+                    "value": fr_text.strip()
+                })
+            continue
         else:
             # 将 user 转换为 human，assistant 转换为 gpt
             role = "human" if msg["role"] == "user" else "gpt"

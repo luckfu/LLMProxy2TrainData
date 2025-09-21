@@ -938,7 +938,11 @@ class DynamicProxyEndpoint:
                 # 审计：仅工具调用也保存时打印 INFO
                 if save_due_to_tool and not complete_response:
                     tool_names = ", ".join([tc.get("function", {}).get("name", "unknown_tool") for tc in anthropic_tool_calls]) or "unknown_tool"
-                    await self.async_logger.info(f"📌 保存于工具阶段（function_call-only），数量={len(anthropic_tool_calls)}，工具={tool_names}")
+                    # 默认降为 DEBUG，如需 INFO 级别审计，设置环境变量 PROXY_AUDIT_TOOL_SAVE
+                    if os.getenv("PROXY_AUDIT_TOOL_SAVE"):
+                        await self.async_logger.info(f"📌 保存于工具阶段（function_call-only），数量={len(anthropic_tool_calls)}，工具={tool_names}")
+                    else:
+                        await self.async_logger.debug(f"📌 保存于工具阶段（function_call-only），数量={len(anthropic_tool_calls)}，工具={tool_names}")
                 # 处理不同API格式的消息转换
                 messages = []
                 if auth_type == "google":
@@ -972,10 +976,27 @@ class DynamicProxyEndpoint:
                         marker = json.dumps(anthropic_tool_calls, ensure_ascii=False)
                     except Exception:
                         marker = "[]"
-                    # 在回复末尾追加工具调用标记，供后续解析
-                    append_text = f"\n[ANTHROPIC_TOOL_CALLS: {marker}]"
-                    # 如果完全没有可见文本，也要有最小占位，方便前端显示
-                    formatted_response = (formatted_response or "") + append_text
+                    append_text = f"[ANTHROPIC_TOOL_CALLS: {marker}]"
+                    if save_due_to_tool and not complete_response:
+                        # fc-only：不写任何 assistant 文本；直接把工具调用转为 function_call 消息；response 留空
+                        if not isinstance(messages, list):
+                            messages = []
+                        for tc in anthropic_tool_calls:
+                            fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                            name = fn.get("name", "unknown_tool")
+                            args_val = fn.get("arguments", "{}")
+                            try:
+                                args_obj = json.loads(args_val) if isinstance(args_val, str) else args_val
+                            except Exception:
+                                args_obj = args_val
+                            messages.append({
+                                "role": "function_call",
+                                "content": json.dumps({"name": name, "arguments": args_obj}, ensure_ascii=False)
+                            })
+                        formatted_response = ""  # 确保无可见文本
+                    else:
+                        # 非 fc-only：保留原有行为，将标记附加在可见文本末尾
+                        formatted_response = (formatted_response or "") + "\n" + append_text
                 
                 # 调试：打印最终保存的内容
                 await self.async_logger.debug(f"🔍 调试 - 流式响应最终内容长度: {len(formatted_response)}")
