@@ -21,6 +21,65 @@ from aiohttp.web_middlewares import middleware
 
 import os
 
+# 空异步日志器，避免初始化前的 None 方法调用
+class NullAsyncLogger:
+    async def debug(self, msg: str):
+        pass
+    async def info(self, msg: str):
+        pass
+    async def warning(self, msg: str):
+        pass
+    async def error(self, msg: str):
+        pass
+
+# ——— 角色规范化（入库轻量纠正） ———
+def looks_like_ai_reply(text: str) -> bool:
+    """启发式判断文本更像 AI 回答而非用户提问：长文本/Markdown/思维标签/低问句比率"""
+    try:
+        s = text if isinstance(text, str) else str(text)
+    except Exception:
+        s = ""
+    length = len(s)
+    score = 0
+    if length >= 400:
+        score += 1
+    if ("###" in s) or ("**" in s) or ("<think>" in s):
+        score += 1
+    q_ratio = s.count("?") / max(1, length)
+    if q_ratio < 0.002:
+        score += 1
+    return score >= 2
+
+def normalize_roles(messages: list) -> tuple[list, bool]:
+    """
+    修复“连续两个 user”的明显异常：
+    - 若后一个更像 AI 回答，则改为 assistant，并加 _normalized_role 审计标记
+    返回 (修复后的消息列表, 是否发生修复)
+    """
+    if not isinstance(messages, list):
+        return [], False
+    fixed = []
+    prev_role = None
+    changed = False
+    for m in messages:
+        if not isinstance(m, dict):
+            fixed.append(m)
+            prev_role = None
+            continue
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "user" and prev_role == "user" and looks_like_ai_reply(content):
+            nm = dict(m)
+            nm["role"] = "assistant"
+            nm["_normalized_role"] = "assistant"
+            fixed.append(nm)
+            prev_role = "assistant"
+            changed = True
+            continue
+        fixed.append(m)
+        prev_role = role
+    return fixed, changed
+
 # 自定义日志过滤器，屏蔽探针请求的日志
 class ProbeRequestFilter(logging.Filter):
     """过滤探针请求的日志记录"""
@@ -335,6 +394,64 @@ async def security_headers_mw(request: web.Request, handler):
 class DynamicProxyEndpoint:
     """动态代理端点，无需配置文件"""
     
+    def _extract_messages_for_archive(self, auth_type: str, request_data: Dict[str, Any]) -> list[dict]:
+        """从请求体中抽取归档用的 messages，兼容 Google contents 与 OpenAI messages；正确映射 user/model/system"""
+        msgs: list[dict] = []
+        try:
+            if auth_type == "google":
+                # 先处理 systemInstruction
+                sys_inst = request_data.get("systemInstruction")
+                if isinstance(sys_inst, dict):
+                    sys_parts = sys_inst.get("parts", [])
+                    if isinstance(sys_parts, list):
+                        stexts = []
+                        for sp in sys_parts:
+                            if isinstance(sp, dict):
+                                t = sp.get("text")
+                                if isinstance(t, str) and t:
+                                    stexts.append(t)
+                        if stexts:
+                            msgs.append({"role": "system", "content": "\n".join(stexts)})
+                # 再处理 contents
+                role_map = {"user": "user", "model": "assistant", "system": "system"}
+                contents = request_data.get("contents")
+                if isinstance(contents, list) and contents:
+                    for content in contents:
+                        if not isinstance(content, dict):
+                            continue
+                        parts = content.get("parts", [])
+                        role_raw = content.get("role")
+                        role = role_map.get(role_raw if isinstance(role_raw, str) else "user", "user")
+                        text_parts: list[str] = []
+                        if isinstance(parts, list):
+                            for part in parts:
+                                if isinstance(part, dict):
+                                    t = part.get("text")
+                                    if isinstance(t, str):
+                                        text_parts.append(t)
+                        if text_parts:
+                            msgs.append({"role": role, "content": "\n".join(text_parts)})
+                else:
+                    # 回退：支持客户端直接使用 OpenAI messages
+                    om = request_data.get("messages")
+                    if isinstance(om, list):
+                        for m in om:
+                            if isinstance(m, dict) and "role" in m:
+                                role = m.get("role")
+                                if role in ("user", "assistant", "system"):
+                                    msgs.append({
+                                        "role": role,
+                                        "content": str(m.get("content", "")) if m.get("content") is not None else ""
+                                    })
+            else:
+                om = request_data.get("messages")
+                if isinstance(om, list):
+                    msgs = om
+        except Exception:
+            # 失败时返回空数组，后续格式化函数仍可处理
+            msgs = []
+        return msgs
+    
     def __init__(self, port: int = 8080):
         self.port = port
 
@@ -369,8 +486,9 @@ class DynamicProxyEndpoint:
         
         # 性能优化相关
         self.http_session = None
-        self.async_logger = None
-        self.conversation_queue = None
+        self.async_logger = NullAsyncLogger()
+        # 预置一个队列，启动时会覆盖
+        self.conversation_queue = asyncio.Queue(maxsize=1000)
         self.batch_size = 10
         self.batch_timeout = 5.0
         self.batch_save_task = None  # 添加批量保存任务的引用
@@ -934,7 +1052,11 @@ class DynamicProxyEndpoint:
             # 保存对话 - 处理不同API格式的消息转换
             # 修改：当存在工具调用时（Anthropic stop_reason=tool_use），即使没有可见文本也保存
             save_due_to_tool = (auth_type == "anthropic" and len(anthropic_tool_calls) > 0)
-            if response_id and (complete_response or save_due_to_tool):
+            # 兜底：若上游未提供response_id，生成一个UUID以确保可入库
+            if not response_id:
+                response_id = str(uuid.uuid4())
+            # 始终入队保存（即便可见文本为空），确保审计与排查完整
+            if True:
                 # 审计：仅工具调用也保存时打印 INFO
                 if save_due_to_tool and not complete_response:
                     tool_names = ", ".join([tc.get("function", {}).get("name", "unknown_tool") for tc in anthropic_tool_calls]) or "unknown_tool"
@@ -944,25 +1066,8 @@ class DynamicProxyEndpoint:
                     else:
                         await self.async_logger.debug(f"📌 保存于工具阶段（function_call-only），数量={len(anthropic_tool_calls)}，工具={tool_names}")
                 # 处理不同API格式的消息转换
-                messages = []
-                if auth_type == "google":
-                    # Google API格式转换：contents -> messages
-                    if "contents" in request_data:
-                        for content in request_data["contents"]:
-                            # Google API的contents通常没有role字段，默认为用户消息
-                            # 提取用户消息
-                            text_parts = []
-                            for part in content.get("parts", []):
-                                if "text" in part:
-                                    text_parts.append(part["text"])
-                            if text_parts:
-                                messages.append({
-                                    "role": "user",
-                                    "content": "\n".join(text_parts)
-                                })
-                else:
-                    # OpenAI/Anthropic格式
-                    messages = request_data.get('messages', [])
+                # 统一抽取归档消息，兼容 Google contents 与 OpenAI messages
+                messages = self._extract_messages_for_archive(auth_type, request_data)
                 
                 # 存档：
                 # - OpenAI/Google：有结构化思考时附加<think>
@@ -1041,28 +1146,8 @@ class DynamicProxyEndpoint:
             if complete_response:
                 # 不做思考抽取，直接保存原文
                 # 处理不同API格式的消息转换
-                messages = []
-                if auth_type == "google":
-                    # Google API格式转换：contents -> messages
-                    # Google API的contents通常没有role字段，默认为用户消息
-                    if "contents" in request_data and isinstance(request_data["contents"], list):
-                        for content in request_data["contents"]:
-                            if isinstance(content, dict) and "parts" in content:
-                                # 提取用户消息（Google API的contents默认为用户输入）
-                                text_parts = []
-                                parts = content.get("parts", [])
-                                if isinstance(parts, list):
-                                    for part in parts:
-                                        if isinstance(part, dict) and "text" in part:
-                                            text_parts.append(part["text"])
-                                if text_parts:
-                                    messages.append({
-                                        "role": "user",
-                                        "content": "\n".join(text_parts)
-                                    })
-                else:
-                    # OpenAI/Anthropic格式
-                    messages = request_data.get('messages', [])
+                # 统一抽取归档消息，兼容 Google contents 与 OpenAI messages
+                messages = self._extract_messages_for_archive(auth_type, request_data)
                 
                 # 调试：打印转换后的消息
                 await self.async_logger.debug(f"🔍 调试 - 转换后的消息格式: {json.dumps(messages, ensure_ascii=False, indent=2)}")
@@ -1208,7 +1293,7 @@ class DynamicProxyEndpoint:
                 return f"<think>\n{reasoning_content}\n</think>\n\n{response_content}" if reasoning_content else response_content
         return ""
     
-    async def _parse_google_final_response(self, response_json: Dict[str, Any]) -> tuple:
+    async def _parse_google_final_response(self, response_json: Dict[str, Any]) -> tuple[str, str]:
         """解析Google API最终响应内容，返回(响应内容, 思考过程)"""
         response_text = ""
         reasoning = ""
@@ -1299,120 +1384,92 @@ class DynamicProxyEndpoint:
         return response_text, reasoning
     
     async def _parse_google_stream_chunk(self, line_str: str, complete_response: str, response_id: Optional[str]):
-        """解析Google API流式响应块"""
+        """解析Google API流式响应块；兼容 OpenAI 风格的 choices.delta"""
         complete_reasoning = ""
-        
-        # 调试：打印接收到的原始数据
         await self.async_logger.debug(f"🔍 调试 - Google流式原始数据: {repr(line_str[:100])}")
         
-        # Google API流式数据可能不带 "data: " 前缀，直接是JSON片段
-        json_data = line_str.strip()
-        if json_data.startswith("data: "):
-            if json_data.strip() == "data: [DONE]":
+        # 统一提取 JSON 载荷
+        payload = line_str.strip()
+        if payload.startswith("data: "):
+            if payload.strip() == "data: [DONE]":
                 return complete_response, response_id, complete_reasoning
-            json_data = json_data[6:].strip()
-        
-        # 跳过空行和非JSON数据
-        if not json_data or json_data in ['{', '}', '[', ']', ',']:
+            payload = payload[6:].strip()
+        if not payload:
             return complete_response, response_id, complete_reasoning
-            
-        # Google API返回的是JSON片段，需要特殊处理
+        
         try:
-            # 尝试直接解析完整JSON
-            if json_data.startswith('{') and json_data.endswith('}'):
-                json_chunk = json.loads(json_data)
-                await self.async_logger.debug(f"🔍 调试 - 解析完整JSON成功")
-                
-                # 获取response_id
-                if not response_id and "responseId" in json_chunk:
-                    response_id = json_chunk["responseId"]
-                    await self.async_logger.debug(f"🔍 调试 - 获取到responseId: {response_id}")
-                
-                # 解析candidates中的内容
-                if "candidates" in json_chunk and json_chunk["candidates"]:
-                    candidate = json_chunk["candidates"][0]
-                    if "content" in candidate and "parts" in candidate["content"]:
-                        for part in candidate["content"]["parts"]:
-                            is_thought_part = False
-                            # 新结构：thinking 对象里包含思考文本
-                            if "thinking" in part and isinstance(part.get("thinking"), dict):
-                                t = part["thinking"].get("thought")
-                                if isinstance(t, str) and t:
-                                    complete_reasoning += t
-                                    is_thought_part = True
-                                    await self.async_logger.debug(f"🔍 调试 - 提取思维链(part.thinking.thought): {t[:50]}...")
-                            # 旧结构：thought 为 True 时，text 属于思考
-                            elif "thought" in part and isinstance(part.get("thought"), bool) and part.get("thought") is True:
-                                t = part.get("text", "")
-                                if isinstance(t, str) and t:
-                                    complete_reasoning += t
-                                    is_thought_part = True
-                                    await self.async_logger.debug(f"🔍 调试 - 提取思维链(part.thought=true): {t[:50]}...")
-                            # 普通文本片段，计入最终可见回答（仅非思考片段）
-                            if (not is_thought_part) and "text" in part and isinstance(part.get("text"), str):
-                                text_content = part["text"]
-                                complete_response += text_content
-                                await self.async_logger.debug(f"🔍 调试 - 提取文本内容: {text_content[:50]}...")
-            else:
-                # 对于JSON片段，尝试提取关键信息
-                if '"text":' in json_data:
-                    # 若片段包含思考标记，则跳过把 text 并入可见答案
-                    if ('"thought": true' in json_data) or ('"thinking"' in json_data):
-                        await self.async_logger.debug("🔍 调试 - 片段包含思考标记，跳过将 text 并入可见答案")
-                    else:
-                        # 使用正则表达式提取text内容
-                        import re
-                        text_match = re.search(r'"text":\s*"([^"]*)"', json_data)
-                        if text_match:
-                            text_content = text_match.group(1)
-                            complete_response += text_content
-                            await self.async_logger.debug(f"🔍 调试 - 从片段提取文本: {text_content[:50]}...")
-                
-                if '"responseId":' in json_data and not response_id:
-                    # 提取responseId
-                    import re
-                    id_match = re.search(r'"responseId":\s*"([^"]*)"', json_data)
-                    if id_match:
-                        response_id = id_match.group(1)
-                        await self.async_logger.debug(f"🔍 调试 - 从片段提取responseId: {response_id}")
-                
-        except json.JSONDecodeError as e:
-            await self.async_logger.debug(f"🔍 调试 - JSON解析失败: {str(e)[:100]}")
-            # 尝试处理SSE格式：data: {json}
-            if line_str.startswith("data: ") and len(line_str) > 6:
-                sse_data = line_str[6:].strip()
-                if sse_data and sse_data != "[DONE]":
-                    try:
-                        json_chunk = json.loads(sse_data)
-                        await self.async_logger.debug(f"🔍 调试 - SSE格式解析成功")
-                        
-                        # 获取response_id
-                        if not response_id and "responseId" in json_chunk:
-                            response_id = json_chunk["responseId"]
-                            await self.async_logger.debug(f"🔍 调试 - 获取到responseId: {response_id}")
-                        
-                        # 解析candidates中的内容
-                        if "candidates" in json_chunk and json_chunk["candidates"]:
-                            candidate = json_chunk["candidates"][0]
-                            if "content" in candidate and "parts" in candidate["content"]:
-                                for part in candidate["content"]["parts"]:
-                                    is_thought_part = False
-                                    if "thinking" in part and isinstance(part.get("thinking"), dict):
-                                        t = part["thinking"].get("thought")
-                                        if isinstance(t, str) and t:
-                                            complete_reasoning += t
-                                            is_thought_part = True
-                                    elif "thought" in part and isinstance(part.get("thought"), bool) and part.get("thought") is True:
-                                        t = part.get("text", "")
-                                        if isinstance(t, str) and t:
-                                            complete_reasoning += t
-                                            is_thought_part = True
-                                    if (not is_thought_part) and "text" in part:
-                                        text_content = part["text"]
-                                        complete_response += text_content
-                                        await self.async_logger.debug(f"🔍 调试 - 提取文本内容: {text_content[:50]}...")
-                    except json.JSONDecodeError:
-                        await self.async_logger.debug(f"🔍 调试 - SSE数据仍然不是有效JSON")
+            if not (payload.startswith("{") and payload.endswith("}")):
+                # 非完整 JSON 的简易提取（Google 片段）
+                if '"text":' in payload and '"thought": true' not in payload and '"thinking"' not in payload:
+                    import re as _re
+                    m = _re.search(r'"text":\s*"([^"]*)"', payload)
+                    if m:
+                        complete_response += m.group(1)
+                if '"responseId":' in payload and not response_id:
+                    import re as _re
+                    m = _re.search(r'"responseId":\s*"([^"]*)"', payload)
+                    if m:
+                        response_id = m.group(1)
+                return complete_response, response_id, complete_reasoning
+            
+            # 解析完整 JSON
+            obj = json.loads(payload)
+            # 兼容 OpenAI 风格 chunk：choices.delta
+            if isinstance(obj, dict) and "choices" in obj and obj.get("choices"):
+                ch0 = obj["choices"][0]
+                if isinstance(ch0, dict):
+                    delta = ch0.get("delta") or {}
+                    if "id" in obj and not response_id:
+                        response_id = obj["id"]
+                    rc = delta.get("reasoning_content")
+                    if rc is not None:
+                        try:
+                            if isinstance(rc, str):
+                                complete_reasoning += rc
+                            elif isinstance(rc, dict):
+                                for k in ("text", "content", "message"):
+                                    v = rc.get(k)
+                                    if isinstance(v, str):
+                                        complete_reasoning += v
+                                    elif isinstance(v, list):
+                                        complete_reasoning += "".join(x.get("text", "") if isinstance(x, dict) else str(x) for x in v)
+                                parts = rc.get("parts")
+                                if isinstance(parts, list):
+                                    complete_reasoning += "".join(x.get("text", "") if isinstance(x, dict) else str(x) for x in parts)
+                            elif isinstance(rc, list):
+                                complete_reasoning += "".join(x.get("text", "") if isinstance(x, dict) else str(x) for x in rc)
+                            else:
+                                complete_reasoning += str(rc)
+                        except Exception:
+                            pass
+                    content = delta.get("content")
+                    if isinstance(content, str):
+                        complete_response += content
+                return complete_response, response_id, complete_reasoning
+            
+            # Google candidates 解析
+            if "responseId" in obj and not response_id:
+                response_id = obj["responseId"]
+            if "candidates" in obj and obj.get("candidates"):
+                cand = obj["candidates"][0]
+                cont = cand.get("content", {})
+                parts = cont.get("parts", [])
+                if isinstance(parts, list):
+                    for part in parts:
+                        if not isinstance(part, dict):
+                            continue
+                        # 思考
+                        if "thinking" in part and isinstance(part.get("thinking"), dict):
+                            t = part["thinking"].get("thought")
+                            if isinstance(t, str) and t:
+                                complete_reasoning += t
+                        elif part.get("thought") is True:
+                            t = part.get("text")
+                            if isinstance(t, str) and t:
+                                complete_reasoning += t
+                        # 可见文本
+                        elif "text" in part and isinstance(part.get("text"), str):
+                            complete_response += part["text"]
         except Exception as e:
             await self.async_logger.error(f"Google流式解析错误: {e}")
             await self.async_logger.error(f"错误详情: {traceback.format_exc()}")
@@ -1506,7 +1563,21 @@ class DynamicProxyEndpoint:
                 # 格式化为ShareGPT格式
                 # 优先使用conversation中的messages，如果没有则使用request中的messages
                 messages = conversation.get('messages', conversation.get('request', {}).get('messages', []))
-                
+                # 入库轻量纠正：修复“连续两个 user 且第二条像 AI 回答”
+                norm_changed = False
+                try:
+                    messages, norm_changed = normalize_roles(messages)
+                except Exception:
+                    norm_changed = False
+                if norm_changed:
+                    # 审计标记 + 保留原始请求
+                    try:
+                        flags = conversation.setdefault('flags', [])
+                        if 'normalized_roles' not in flags:
+                            flags.append('normalized_roles')
+                        conversation.setdefault('request_raw', conversation.get('request', {}))
+                    except Exception:
+                        pass
                 # 调试：打印格式化前的数据
                 await self.async_logger.debug(f"🔍 调试 - 格式化前的消息: {json.dumps(messages, ensure_ascii=False, indent=2)}")
                 await self.async_logger.debug(f"🔍 调试 - 响应内容: {conversation.get('response', '')}")

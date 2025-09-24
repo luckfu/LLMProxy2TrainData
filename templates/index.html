@@ -584,9 +584,16 @@
                     </select>
                 </div>
                 <div class="col-md-8 text-end">
-                    <div class="d-flex justify-content-end gap-2 mt-4">
+                    <div class="d-flex justify-content-end align-items-center gap-2 mt-4">
                         <span class="badge bg-primary fs-6 px-3 py-2">总记录数: <span id="totalCount">0</span></span>
                         <span class="badge bg-success fs-6 px-3 py-2">已筛选: <span id="filteredCount">0</span></span>
+                        <div class="vr mx-2" style="height: 28px;"></div>
+                        <button id="batchConfirmBtnTop" class="btn btn-primary btn-sm" disabled>
+                            ✅ 批量确认
+                        </button>
+                        <button id="batchDeleteBtnTop" class="btn btn-danger btn-sm" disabled>
+                            🗑️ 批量删除
+                        </button>
                     </div>
                 </div>
             </div>
@@ -778,12 +785,25 @@
                 updateBatchConfirmButton();
             });
 
-            // 更新批量确认按钮状态
+            // 更新批量确认按钮状态（同步顶部与底部按钮）
             function updateBatchConfirmButton() {
                 const checkedCount = $('.record-checkbox:checked').length;
-                $('#batchConfirmBtn').prop('disabled', checkedCount === 0);
-                $('#batchDeleteBtn').prop('disabled', checkedCount === 0);
+                const disabled = checkedCount === 0;
+                $('#batchConfirmBtn').prop('disabled', disabled);
+                $('#batchDeleteBtn').prop('disabled', disabled);
+                $('#batchConfirmBtnTop').prop('disabled', disabled);
+                $('#batchDeleteBtnTop').prop('disabled', disabled);
             }
+            
+            // 顶部批量确认按钮点击事件（复用底部逻辑）
+            $('#batchConfirmBtnTop').click(function() {
+                $('#batchConfirmBtn').click();
+            });
+            
+            // 顶部批量删除按钮点击事件（复用底部逻辑）
+            $('#batchDeleteBtnTop').click(function() {
+                $('#batchDeleteBtn').click();
+            });
 
             // 批量确认按钮点击事件
             $('#batchConfirmBtn').click(function() {

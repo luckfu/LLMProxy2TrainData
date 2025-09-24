@@ -22,10 +22,23 @@ def ensure_confirmed_table():
     finally:
         conn.close()
 
-# 在首次请求前确保表存在
-@app.before_first_request
-def _init_tables():
-    ensure_confirmed_table()
+def ensure_interactions_table():
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS interactions (
+                id TEXT PRIMARY KEY,
+                model TEXT,
+                conversation TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+    finally:
+        conn.close()
+
+
 
 def get_db_connection():
     conn = sqlite3.connect('interactions.db')
@@ -213,4 +226,7 @@ def confirm_interaction():
         conn.close()
 
 if __name__ == '__main__':
+    # 启动前确保表存在
+    ensure_interactions_table()
+    ensure_confirmed_table()
     app.run(debug=True)
