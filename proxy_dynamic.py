@@ -519,8 +519,9 @@ class DynamicProxyEndpoint:
         self.app.router.add_post("/v1/completions", self.handle_openai_api)
         self.app.router.add_post("/v1/embeddings", self.handle_openai_api)
         
-        # 动态代理路由：/{domain}/{path:.*}
+        # 动态代理路由：/{domain}/{path:.*} - 支持GET和POST请求
         self.app.router.add_post("/{domain}/{path:.*}", self.handle_dynamic_proxy)
+        self.app.router.add_get("/{domain}/{path:.*}", self.handle_dynamic_proxy)
         self.app.router.add_get("/health", self.handle_health_check)
         
     async def init_async_resources(self, app):
@@ -799,17 +800,22 @@ class DynamicProxyEndpoint:
             
             # 获取请求数据
             headers = dict(request.headers)
-            request_data = await request.json()
             
-            # 调试：打印客户端发送的消息
-            await self.async_logger.debug(f"🔍 调试 - 客户端请求数据: {json.dumps(request_data, ensure_ascii=False, indent=2)}")
-            
-            # 请求体大小检查
-            if not await self._validate_request_size(request_data):
-                return web.Response(
-                    status=413,
-                    text=json.dumps({"error": "请求体过大，请减小输入数据大小或分批处理"})
-                )
+            # 处理GET请求（无请求体）和POST请求（有请求体）
+            if request.method == 'GET':
+                request_data = {}
+                await self.async_logger.debug(f"🔍 调试 - GET请求: {request.method} {path}")
+            else:
+                request_data = await request.json()
+                # 调试：打印客户端发送的消息
+                await self.async_logger.debug(f"🔍 调试 - 客户端请求数据: {json.dumps(request_data, ensure_ascii=False, indent=2)}")
+                
+                # 请求体大小检查（仅对POST请求）
+                if not await self._validate_request_size(request_data):
+                    return web.Response(
+                        status=413,
+                        text=json.dumps({"error": "请求体过大，请减小输入数据大小或分批处理"})
+                    )
             
             # 根据域名配置或路径识别认证类型
             domain_config = self.allowed_domains.get(domain, {})
@@ -847,15 +853,24 @@ class DynamicProxyEndpoint:
             
             for attempt in range(max_retries):
                 try:
-                    async with self.http_session.post(
-                        target_url,
-                        headers=forward_headers,
-                        json=request_data
-                    ) as resp:
-                        if is_stream:
-                            return await self._handle_stream_response(resp, request, auth_type, model, request_data)
-                        else:
+                    # 根据请求方法选择合适的HTTP方法
+                    if request.method == 'GET':
+                        async with self.http_session.get(
+                            target_url,
+                            headers=forward_headers
+                        ) as resp:
+                            # GET请求通常不是流式的，直接返回响应
                             return await self._handle_non_stream_response(resp, auth_type, model, request_data)
+                    else:
+                        async with self.http_session.post(
+                            target_url,
+                            headers=forward_headers,
+                            json=request_data
+                        ) as resp:
+                            if is_stream:
+                                return await self._handle_stream_response(resp, request, auth_type, model, request_data)
+                            else:
+                                return await self._handle_non_stream_response(resp, auth_type, model, request_data)
                 
                 except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
                     if attempt < max_retries - 1:  # 不是最后一次尝试
